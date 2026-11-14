@@ -15,6 +15,7 @@ import { isElectron } from "~/env";
 import { getLocalStorageItem, setLocalStorageItem } from "~/hooks/useLocalStorage";
 import { cn } from "~/lib/utils";
 
+import { expectedBuild, isBuildOfSources } from "./builtCircuit";
 import { type CircuitViewHelp, CircuitViewHelpDialog } from "./CircuitViewHelpDialog";
 import {
   appendToPrompt,
@@ -35,7 +36,13 @@ import {
   viewStateForFile,
   viewTabs,
 } from "./circuitViews";
-import { type LoadedProject, loadProjectFsMap, pickEntryFile } from "./projectFsMap";
+import {
+  type LoadedProject,
+  loadProjectFsMap,
+  pickEntryFile,
+  type ProjectFsMap,
+  readBuiltCircuitJson,
+} from "./projectFsMap";
 import { parseViewerMessage, viewerFileProps, viewerTabProps } from "./runframeMessages";
 import { viewerFrame } from "./viewerFrame";
 
@@ -66,13 +73,99 @@ type ProjectState =
     }
   | { readonly status: "failed" };
 
-function sameProject(a: LoadedProject, b: LoadedProject): boolean {
-  const paths = Object.keys(a.fsMap);
-  return (
-    a.truncated === b.truncated &&
-    paths.length === Object.keys(b.fsMap).length &&
-    paths.every((path) => a.fsMap[path] === b.fsMap[path])
-  );
+function sameFiles(a: ProjectFsMap | null, b: ProjectFsMap | null): boolean {
+  if (a === null || b === null) return a === b;
+  const paths = Object.keys(a);
+  return paths.length === Object.keys(b).length && paths.every((path) => a[path] === b[path]);
+}
+
+/** Files that did not change keep their identity, so the viewer is not asked to render again. */
+function keepUnchangedFiles(current: LoadedProject, loaded: LoadedProject): LoadedProject {
+  const fsMap = sameFiles(current.fsMap, loaded.fsMap) ? current.fsMap : loaded.fsMap;
+  const hashedFiles = sameFiles(current.hashedFiles, loaded.hashedFiles)
+    ? current.hashedFiles
+    : loaded.hashedFiles;
+  return fsMap === current.fsMap &&
+    hashedFiles === current.hashedFiles &&
+    loaded.truncated === current.truncated
+    ? current
+    : { fsMap, hashedFiles, truncated: loaded.truncated };
+}
+
+/** What the viewer is given to draw: a file to run, or a build's Circuit JSON to show as it is. */
+interface ViewerFiles {
+  readonly fsMap: ProjectFsMap;
+  readonly mainComponentPath: string;
+}
+
+type BuiltCircuit =
+  | { readonly status: "checking" }
+  | { readonly status: "none" }
+  | { readonly status: "current"; readonly files: ViewerFiles };
+
+/**
+ * The `tsci build` output of the file on screen, while it is a build of the sources as they
+ * are now. A build that is missing or out of date is looked for again after agent work and
+ * on focus. One that is current is kept: the same sources build the same circuit.
+ */
+function useBuiltCircuit(input: {
+  readonly environmentId: EnvironmentId;
+  readonly cwd: string | undefined;
+  readonly visible: boolean;
+  readonly workspaceMutationId: string | null;
+  /** Where the build would be and the hash it has to carry, or null when either is unknown. */
+  readonly build: { readonly path: string; readonly sourceHash: string } | null;
+}): BuiltCircuit {
+  const { environmentId, cwd, visible, workspaceMutationId } = input;
+  const path = input.build?.path ?? null;
+  const sourceHash = input.build?.sourceHash ?? null;
+  const [found, setFound] = useState<{
+    readonly path: string;
+    readonly sourceHash: string;
+    /** The workspace mutation this look was made for. */
+    readonly revision: string | null;
+    readonly files: ViewerFiles | null;
+  } | null>(null);
+  const answer = found !== null && found.path === path && found.sourceHash === sourceHash;
+  const settled = answer && found.files !== null;
+
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- reads the build's file from the environment; looks again after agent work and on focus, when a build may have been made
+  useEffect(() => {
+    if (!cwd || !visible || path === null || sourceHash === null || settled) return;
+    const abort = new AbortController();
+    let reading = false;
+    const look = () => {
+      if (reading) return;
+      reading = true;
+      readBuiltCircuitJson(environmentId, cwd, path, abort.signal)
+        .catch(() => null)
+        .then((text) => {
+          if (abort.signal.aborted) return;
+          setFound({
+            path,
+            sourceHash,
+            revision: workspaceMutationId,
+            files:
+              text !== null && isBuildOfSources(text, sourceHash)
+                ? { fsMap: { [path]: text }, mainComponentPath: path }
+                : null,
+          });
+        })
+        .finally(() => {
+          reading = false;
+        });
+    };
+    look();
+    window.addEventListener("focus", look);
+    return () => {
+      abort.abort();
+      window.removeEventListener("focus", look);
+    };
+  }, [environmentId, cwd, visible, workspaceMutationId, path, sourceHash, settled]);
+
+  if (path === null || sourceHash === null) return { status: "none" };
+  if (!answer) return { status: "checking" };
+  return found.files === null ? { status: "none" } : { status: "current", files: found.files };
 }
 
 export default function CircuitPanel(props: {
@@ -109,13 +202,13 @@ export default function CircuitPanel(props: {
         .then((loaded) => {
           if (abort.signal.aborted) return;
           setProjectState((current) => {
-            // Unchanged files keep their identity, so the viewer is not asked to render again.
-            if (current.status !== "ready" || !sameProject(current.project, loaded)) {
-              return { status: "ready", project: loaded, revision: workspaceMutationId };
-            }
-            return current.revision === workspaceMutationId
+            const project =
+              current.status === "ready" ? keepUnchangedFiles(current.project, loaded) : loaded;
+            return current.status === "ready" &&
+              current.project === project &&
+              current.revision === workspaceMutationId
               ? current
-              : { ...current, revision: workspaceMutationId };
+              : { status: "ready", project, revision: workspaceMutationId };
           });
         })
         .catch(() => {
@@ -146,6 +239,25 @@ export default function CircuitPanel(props: {
         ? relativePath
         : pickEntryFile(project.fsMap);
 
+  const built = useBuiltCircuit({
+    environmentId,
+    cwd,
+    visible,
+    workspaceMutationId,
+    build:
+      entryFile === null || !project?.hashedFiles
+        ? null
+        : expectedBuild(entryFile, project.hashedFiles),
+  });
+  // Nothing new goes to the viewer until it is known whether there is a build to show instead.
+  const viewerFiles =
+    project === null || entryFile === null || built.status === "checking"
+      ? null
+      : built.status === "current"
+        ? built.files
+        : { fsMap: project.fsMap, mainComponentPath: entryFile };
+
+  const view = viewStateForFile(panelState, entryFile);
   const notice = !cwd ? (
     <Notice title="No project folder" description="Open a project to see its circuit here." />
   ) : projectState.status === "failed" ? (
@@ -160,9 +272,11 @@ export default function CircuitPanel(props: {
       title="No circuit yet"
       description="This project has no .tsx files. Ask the agent for a circuit and it shows up here."
     />
+  ) : viewerFiles === null && panelState.file !== entryFile && view.screen !== "source" ? (
+    // The viewer still shows the file opened before this one.
+    <Notice title="Reading project files" busy />
   ) : null;
 
-  const view = viewStateForFile(panelState, entryFile);
   const source = entryFile === null ? null : (project?.fsMap[entryFile] ?? null);
   const unmuted = unmutedViews(view);
   const help =
@@ -202,8 +316,8 @@ export default function CircuitPanel(props: {
       <div className="relative flex min-h-0 flex-1 flex-col">
         <CircuitViewer
           key={viewerAttempt}
-          fsMap={project?.fsMap ?? null}
-          mainComponentPath={entryFile}
+          file={entryFile}
+          files={viewerFiles}
           screen={view.screen}
           covered={notice !== null || view.screen === "source"}
           dispatch={dispatch}
@@ -309,19 +423,23 @@ function CircuitViewTabs(props: {
  * read, and receives the files when both are ready. Remount it to retry.
  */
 function CircuitViewer(props: {
-  readonly fsMap: Record<string, string> | null;
-  readonly mainComponentPath: string | null;
+  /** The file on screen, which the viewer's events are about. */
+  readonly file: string | null;
+  /** What the viewer draws for it. Null while that is not known yet. */
+  readonly files: ViewerFiles | null;
   readonly screen: CircuitScreen;
   /** True while the panel shows a notice or the source over the frame. */
   readonly covered: boolean;
   readonly dispatch: Dispatch<PanelAction>;
   readonly onRetry: () => void;
 }) {
-  const { fsMap, mainComponentPath, screen, covered, dispatch, onRetry } = props;
+  const { file, screen, covered, dispatch, onRetry } = props;
+  const fsMap = props.files?.fsMap ?? null;
+  const mainComponentPath = props.files?.mainComponentPath ?? null;
   const frameRef = useRef<HTMLIFrameElement>(null);
   const [state, setState] = useState<"loading" | "ready" | "failed">("loading");
-  // The files the viewer last received. Its events are about the file named here.
-  const sentRef = useRef<{ fsMap: Record<string, string>; mainComponentPath: string } | null>(null);
+  // What the viewer last received. Its events are about the file named here.
+  const sentRef = useRef<({ readonly file: string } & ViewerFiles) | null>(null);
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- subscribes to the viewer frame's messages and gives up waiting for it after a timeout
   useEffect(() => {
@@ -334,10 +452,10 @@ function CircuitViewer(props: {
         setState("ready");
         return;
       }
-      const file = sentRef.current?.mainComponentPath;
-      if (file === undefined) return;
+      const sentFile = sentRef.current?.file;
+      if (sentFile === undefined) return;
       const { kind, ...detail } = message;
-      dispatch({ type: kind, file, ...detail } as PanelAction);
+      dispatch({ type: kind, file: sentFile, ...detail } as PanelAction);
     };
     window.addEventListener("message", onMessage);
     const timeout = window.setTimeout(
@@ -352,9 +470,10 @@ function CircuitViewer(props: {
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- sends the files and the tab to show to the viewer frame, an external system
   useEffect(() => {
-    if (state !== "ready" || fsMap === null || mainComponentPath === null) return;
+    if (state !== "ready" || file === null || fsMap === null || mainComponentPath === null) return;
     const sent = sentRef.current;
-    const filesChanged = sent?.fsMap !== fsMap || sent.mainComponentPath !== mainComponentPath;
+    const filesChanged =
+      sent?.file !== file || sent.fsMap !== fsMap || sent.mainComponentPath !== mainComponentPath;
     frameRef.current?.contentWindow?.postMessage(
       {
         runframe_type: "runframe_props_changed",
@@ -366,9 +485,9 @@ function CircuitViewer(props: {
       VIEWER_FRAME.targetOrigin,
     );
     if (!filesChanged) return;
-    sentRef.current = { fsMap, mainComponentPath };
-    dispatch({ type: "files_sent", file: mainComponentPath });
-  }, [state, fsMap, mainComponentPath, screen, dispatch]);
+    sentRef.current = { file, fsMap, mainComponentPath };
+    dispatch({ type: "files_sent", file });
+  }, [state, file, fsMap, mainComponentPath, screen, dispatch]);
 
   return (
     <>

@@ -4,6 +4,8 @@ import { executeAtomQuery } from "@t3tools/client-runtime/state/runtime";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { projectEnvironment } from "~/state/projects";
 
+import { isHashedDirectory, isHashedSourceFile } from "./builtCircuit";
+
 /** Files RunFrame can evaluate or import, keyed by workspace-relative path. */
 export type ProjectFsMap = Record<string, string>;
 
@@ -11,6 +13,11 @@ export interface LoadedProject {
   readonly fsMap: ProjectFsMap;
   /** True when the project was too large to send whole. */
   readonly truncated: boolean;
+  /**
+   * Every file `tsci build` hashes to say which sources a build was made from. Null when they
+   * could not all be read exactly, and so no build can be shown to be current.
+   */
+  readonly hashedFiles: ProjectFsMap | null;
 }
 
 const SOURCE_FILE = /\.(tsx|ts|jsx|js|mjs|cjs|json)$/i;
@@ -20,6 +27,11 @@ const MAX_FILES = 200;
 const MAX_TOTAL_BYTES = 2_000_000;
 const MAX_DEPTH = 6;
 const READ_BATCH_SIZE = 8;
+const MAX_HASHED_FILES = 400;
+const MAX_HASHED_BYTES = 8_000_000;
+const MAX_HASHED_DEPTH = 16;
+/** Folders the viewer has no use for, such as ones git ignores, that are listed for the hash alone. */
+const MAX_HASH_ONLY_DIRECTORIES = 50;
 
 const baseName = (path: string) => path.slice(path.lastIndexOf("/") + 1);
 
@@ -60,76 +72,186 @@ function readConfiguredEntrypoint(config: string | undefined): string | null {
 
 const QUERY_OPTIONS = { refresh: true, reportDefect: false, reportFailure: false } as const;
 
+interface FileRead {
+  readonly contents: string;
+  readonly byteLength: number;
+  readonly truncated: boolean;
+  readonly exists?: boolean | undefined;
+}
+
+/** How a project's folders and files are read. Either answer is null when the read failed. */
+export interface ProjectReader {
+  readonly list: (directoryPath: string) => Promise<{
+    readonly entries: ReadonlyArray<{
+      readonly path: string;
+      readonly kind: "file" | "directory";
+      readonly ignored?: boolean | undefined;
+    }>;
+    readonly truncated: boolean;
+  } | null>;
+  readonly read: (relativePath: string) => Promise<FileRead | null>;
+}
+
+type OnFile = (path: string, file: FileRead | null) => void;
+
+const encodedLength = (text: string) => new TextEncoder().encode(text).length;
+
 /**
  * Reads the project's source files through the environment, so it works for
  * remote environments too. Always refetches: the point is to see new edits.
  */
-export async function loadProjectFsMap(
+export function loadProjectFsMap(
   environmentId: EnvironmentId,
   cwd: string,
   signal: AbortSignal,
 ): Promise<LoadedProject> {
-  const filePaths: string[] = [];
-  let truncated = false;
-  let directories = [""];
+  const query = { ...QUERY_OPTIONS, signal };
+  return readProject({
+    list: async (directoryPath) => {
+      const listing = await executeAtomQuery(
+        appAtomRegistry,
+        // Always pass a path: without one the server lists the whole indexed tree.
+        projectEnvironment.listEntries({ environmentId, input: { cwd, directoryPath } }),
+        query,
+      );
+      return listing._tag === "Success" ? listing.value : null;
+    },
+    read: async (relativePath) => {
+      const file = await executeAtomQuery(
+        appAtomRegistry,
+        projectEnvironment.readFile({ environmentId, input: { cwd, relativePath } }),
+        query,
+      );
+      return file._tag === "Success" ? file.value : null;
+    },
+  });
+}
 
-  for (let depth = 0; depth <= MAX_DEPTH && directories.length > 0; depth += 1) {
-    const listings = await Promise.all(
-      directories.map((directoryPath) =>
-        executeAtomQuery(
-          appAtomRegistry,
-          // Always pass a path: without one the server lists the whole indexed tree.
-          projectEnvironment.listEntries({ environmentId, input: { cwd, directoryPath } }),
-          { ...QUERY_OPTIONS, signal },
-        ),
-      ),
-    );
-    const nextDirectories: string[] = [];
-    for (const listing of listings) {
-      if (listing._tag !== "Success") continue;
-      truncated ||= listing.value.truncated;
-      for (const entry of listing.value.entries) {
-        if (entry.ignored) continue;
+/** The files the viewer is sent, and the ones `tsci build` hashes, which are not quite the same. */
+export async function readProject(reader: ProjectReader): Promise<LoadedProject> {
+  const filePaths: string[] = [];
+  const hashedPaths: string[] = [];
+  let truncated = false;
+  let hashable = true;
+  let hashOnlyDirectories = 0;
+  let directories = [{ path: "", forViewer: true }];
+
+  for (let depth = 0; depth <= MAX_HASHED_DEPTH && directories.length > 0; depth += 1) {
+    const listings = await Promise.all(directories.map((directory) => reader.list(directory.path)));
+    const nextDirectories: typeof directories = [];
+    for (const [index, listing] of listings.entries()) {
+      const forViewer = directories[index]?.forViewer === true;
+      if (listing === null) {
+        hashable = false;
+        continue;
+      }
+      if (listing.truncated) {
+        hashable = false;
+        truncated ||= forViewer;
+      }
+      for (const entry of listing.entries) {
+        const shown = forViewer && !entry.ignored;
         if (entry.kind === "directory") {
-          if (shouldWalkDirectory(entry.path)) nextDirectories.push(entry.path);
-        } else if (isProjectSourceFile(entry.path)) {
-          filePaths.push(entry.path);
+          const walkForViewer = shown && shouldWalkDirectory(entry.path);
+          if (walkForViewer && depth >= MAX_DEPTH) truncated = true;
+          if (isHashedDirectory(entry.path)) {
+            nextDirectories.push({
+              path: entry.path,
+              forViewer: walkForViewer && depth < MAX_DEPTH,
+            });
+          }
+          continue;
         }
+        if (shown && isProjectSourceFile(entry.path)) filePaths.push(entry.path);
+        if (isHashedSourceFile(entry.path)) hashedPaths.push(entry.path);
       }
     }
-    directories = nextDirectories;
+    hashOnlyDirectories += nextDirectories.filter((directory) => !directory.forViewer).length;
+    if (hashOnlyDirectories > MAX_HASH_ONLY_DIRECTORIES || hashedPaths.length > MAX_HASHED_FILES) {
+      hashable = false;
+    }
+    // Without a hash to work out, only the folders the viewer is sent are worth listing.
+    directories = hashable
+      ? nextDirectories
+      : nextDirectories.filter((directory) => directory.forViewer);
   }
-  if (directories.length > 0) truncated = true;
+  if (directories.length > 0) hashable = false;
+
+  const readFiles = async (
+    paths: ReadonlyArray<string>,
+    onFile: OnFile,
+    keepGoing: () => boolean,
+  ) => {
+    for (let start = 0; start < paths.length && keepGoing(); start += READ_BATCH_SIZE) {
+      const batch = paths.slice(start, start + READ_BATCH_SIZE);
+      const files = await Promise.all(batch.map((relativePath) => reader.read(relativePath)));
+      for (const [index, file] of files.entries()) {
+        const path = batch[index];
+        if (path !== undefined) onFile(path, file);
+      }
+    }
+  };
+
+  const hashed = new Set(hashable ? hashedPaths : []);
+  const hashedFiles: ProjectFsMap = {};
+  let hashedBytes = 0;
+  /** The hash is over a file's bytes, so text that does not encode back to them is no use. */
+  const keepForHash: OnFile = (path, file) => {
+    if (!hashed.has(path) || file?.exists === false) return;
+    if (file === null || file.truncated || encodedLength(file.contents) !== file.byteLength) {
+      hashable = false;
+      return;
+    }
+    hashedBytes += file.byteLength;
+    if (hashedBytes > MAX_HASHED_BYTES) hashable = false;
+    hashedFiles[path] = file.contents;
+  };
 
   const fsMap: ProjectFsMap = {};
   let totalBytes = 0;
   const wanted = filePaths.toSorted().slice(0, MAX_FILES);
   if (wanted.length < filePaths.length) truncated = true;
 
-  for (let start = 0; start < wanted.length; start += READ_BATCH_SIZE) {
-    const batch = wanted.slice(start, start + READ_BATCH_SIZE);
-    const results = await Promise.all(
-      batch.map((relativePath) =>
-        executeAtomQuery(
-          appAtomRegistry,
-          projectEnvironment.readFile({ environmentId, input: { cwd, relativePath } }),
-          { ...QUERY_OPTIONS, signal },
-        ),
-      ),
-    );
-    for (const [index, result] of results.entries()) {
-      const path = batch[index];
-      if (path === undefined || result._tag !== "Success") continue;
-      const file = result.value;
-      if (file.exists === false) continue;
+  await readFiles(
+    wanted,
+    (path, file) => {
+      keepForHash(path, file);
+      if (file === null || file.exists === false) return;
       if (file.truncated || totalBytes + file.byteLength > MAX_TOTAL_BYTES) {
         truncated = true;
-        continue;
+        return;
       }
       totalBytes += file.byteLength;
       fsMap[path] = file.contents;
-    }
-  }
+    },
+    () => true,
+  );
+  const sentToViewer = new Set(wanted);
+  await readFiles(
+    [...hashed].filter((path) => !sentToViewer.has(path)),
+    keepForHash,
+    () => hashable,
+  );
 
-  return { fsMap, truncated };
+  return { fsMap, truncated, hashedFiles: hashable ? hashedFiles : null };
+}
+
+/** The text of a build's Circuit JSON, or null when there is none that can be read whole. */
+export async function readBuiltCircuitJson(
+  environmentId: EnvironmentId,
+  cwd: string,
+  relativePath: string,
+  signal: AbortSignal,
+): Promise<string | null> {
+  const result = await executeAtomQuery(
+    appAtomRegistry,
+    projectEnvironment.readFile({
+      environmentId,
+      input: { cwd, relativePath, allowMissing: true },
+    }),
+    { ...QUERY_OPTIONS, signal },
+  );
+  if (result._tag !== "Success") return null;
+  const file = result.value;
+  return file.exists === false || file.truncated ? null : file.contents;
 }
