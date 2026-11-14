@@ -15,9 +15,11 @@ name: Release
 # A pull request from a fork gets no secrets; its build is signed ad hoc, for
 # trying out only. Windows releases use Azure Artifact Signing on main.
 #
-# The app does not update itself yet: the build is made without an update feed,
-# and the app says updates are unavailable. See "Releases and automatic
-# updates" in the README.
+# A release build carries this repository's releases as its update feed, and
+# each release is published with the files the app's updater reads: latest-mac.yml
+# and latest.yml. A pull request's build has a preview version, which gets no
+# feed, so it never updates itself. See "Releases and automatic updates" in the
+# README.
 
 on:
   push:
@@ -93,11 +95,11 @@ jobs:
           package_json_file: .t3code/package.json
       - run: node scripts/setup.ts
 
-      # GITHUB_REPOSITORY is hidden from the build so that it bakes in no update
-      # feed: no release publishes the latest-mac.yml the updater reads.
+      # The build takes the update feed from GITHUB_REPOSITORY: the app looks
+      # for newer versions in this repository's releases.
       - name: Build the app
         run: |
-          env -u GITHUB_REPOSITORY node scripts/run.ts vp run dist:desktop:artifact \
+          node scripts/run.ts vp run dist:desktop:artifact \
             --platform mac --target zip --arch arm64 \
             --build-version "${{ needs.version.outputs.version }}" --verbose
 
@@ -113,6 +115,7 @@ jobs:
           APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
           APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
           APPLE_TEAM_ID: WUQ9WUY75Z
+          VERSION: ${{ needs.version.outputs.version }}
         run: |
           work="$RUNNER_TEMP/app"
           mkdir -p "$work" out
@@ -122,8 +125,27 @@ jobs:
           app="$(find "$work" -maxdepth 1 -name '*.app' | head -1)"
           echo "App: $app"
 
+          # The build writes latest-mac.yml when it gave the app an update feed.
+          # A release must have one, or every copy installed from it is stuck.
+          feed=false
+          if [ -f .t3code/release/latest-mac.yml ]; then
+            feed=true
+            echo "The app's update feed (app-update.yml):"
+            cat "$app/Contents/Resources/app-update.yml"
+          elif [ "$GITHUB_EVENT_NAME" != "pull_request" ]; then
+            echo "::error::The build gave the app no update feed, so this release could not update itself."
+            exit 1
+          fi
+
           if [ -n "$MACOS_CERTIFICATE_P12_BASE64" ]; then
             bash scripts/sign-macos.sh "$app" out "$name"
+            # The build's latest-mac.yml describes the zip from before signing.
+            # The updater refuses a download that differs from it, so write it
+            # again for the zip that is published.
+            if [ "$feed" = true ]; then
+              node scripts/update-manifest.ts write "$VERSION" "out/$name.zip" out/latest-mac.yml
+              cat out/latest-mac.yml
+            fi
           elif [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
             # Ad hoc (no identity): macOS sees one consistent app with our app
             # ID, but asks for confirmation before opening a downloaded copy.
@@ -143,6 +165,7 @@ jobs:
           path: |
             out/*.dmg
             out/*.zip
+            out/*.yml
           if-no-files-found: error
           retention-days: 14
           compression-level: 0
@@ -173,6 +196,10 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
       - uses: actions/download-artifact@v4
         with:
           name: tscircuit-desktop-mac-arm64
@@ -181,6 +208,13 @@ jobs:
         with:
           name: tscircuit-desktop-windows-x64
           path: out
+      # An update whose size or hash differs from its manifest is refused by
+      # every copy of the app, so nothing is published unless they agree.
+      - name: Check the update manifests against the packages
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: node scripts/update-manifest.ts check "$VERSION" out/latest-mac.yml out/latest.yml
+
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -191,9 +225,13 @@ jobs:
 
           **Install on Windows x64:** download and run the `.exe` installer.
 
-          The Mac app is signed and notarized by Apple. The Windows installer is signed by tscircuit Inc through Azure Artifact Signing. Download a newer release to update.
+          The Mac app is signed and notarized by Apple. The Windows installer is signed by tscircuit Inc through Azure Artifact Signing.
+
+          The app updates itself from these releases. A copy that says updates are unavailable was installed before that worked: install a newer release by hand once.
           NOTES
-          gh release create "v$VERSION" out/*.dmg out/*.zip out/*.exe \
+          shopt -s nullglob
+          files=(out/*.dmg out/*.zip out/*.exe out/*.yml out/*.blockmap)
+          gh release create "v$VERSION" "${files[@]}" \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
             --title "tscircuit desktop $VERSION" \

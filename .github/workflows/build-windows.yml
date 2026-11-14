@@ -82,7 +82,8 @@ jobs:
           AZURE_SIGNING_ACCOUNT: ${{ vars.AZURE_SIGNING_ACCOUNT }}
           AZURE_SIGNING_PROFILE: ${{ vars.AZURE_SIGNING_PROFILE }}
         run: |
-          Remove-Item Env:GITHUB_REPOSITORY
+          # The build takes the update feed from GITHUB_REPOSITORY: the app looks
+          # for newer versions in this repository's releases.
           $buildArgs = @('--platform', 'win', '--target', 'nsis', '--arch', 'x64', '--build-version', $env:BUILD_VERSION, '--verbose')
           if ('${{ inputs.sign }}' -eq 'true') {
             $buildArgs += '--signed'
@@ -112,7 +113,12 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: tscircuit-desktop-windows-x64
-          path: .t3code/release/tscircuit-desktop-${{ inputs.version }}-x64.exe
+          # latest.yml and the blockmap are what the app's updater reads. The
+          # build writes them only for a version that gets an update feed.
+          path: |
+            .t3code/release/tscircuit-desktop-${{ inputs.version }}-x64.exe
+            .t3code/release/tscircuit-desktop-${{ inputs.version }}-x64.exe.blockmap
+            .t3code/release/latest.yml
           if-no-files-found: error
           retention-days: 14
           compression-level: 0
