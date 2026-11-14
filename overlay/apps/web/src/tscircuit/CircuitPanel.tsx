@@ -1,6 +1,7 @@
 import type { EnvironmentId } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import { type Dispatch, useEffect, useReducer, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 
 import { ReadOnlySourcePreview } from "~/components/files/AttachmentFilePreview";
 import { FILE_SURFACE_SUBHEADER_CLASS } from "~/components/files/fileSurfaceChrome";
@@ -23,6 +24,7 @@ import {
   type CircuitPanelState,
   circuitPanelReducer,
   type CircuitScreen,
+  type CircuitViewId,
   type CircuitViewAction,
   countErrors,
   fixErrorPrompt,
@@ -45,6 +47,7 @@ import {
 } from "./projectFsMap";
 import { parseViewerMessage, viewerFileProps, viewerTabProps } from "./runframeMessages";
 import { viewerFrame } from "./viewerFrame";
+import { secondCircuitView } from "./circuitSplit";
 
 /**
  * The app's own copy of RunFrame, a bare viewer that takes files over
@@ -179,13 +182,12 @@ export default function CircuitPanel(props: {
   readonly composerDraftTarget: ComposerThreadTarget;
 }) {
   const { environmentId, cwd, relativePath, visible, workspaceMutationId } = props;
-  const [viewerAttempt, setViewerAttempt] = useState(0);
-  const [panelState, dispatch] = useReducer(
-    circuitPanelReducer,
-    preferredViewFrom(getLocalStorageItem(PREFERRED_VIEW_STORAGE_KEY, Schema.String)),
-    initialCircuitPanelState,
-  );
-  const [helpFor, setHelpFor] = useState<StandingViewId | null>(null);
+  const [secondaryView, setSecondaryView] = useState<CircuitViewId | null>(null);
+  const splitButton = useRef<HTMLButtonElement>(null);
+  const closeSplit = () => {
+    flushSync(() => setSecondaryView(null));
+    splitButton.current?.focus();
+  };
   const [projectState, setProjectState] = useState<ProjectState>({ status: "loading" });
 
   const project = projectState.status === "ready" ? projectState.project : null;
@@ -257,10 +259,84 @@ export default function CircuitPanel(props: {
         ? built.files
         : { fsMap: project.fsMap, mainComponentPath: entryFile };
 
+  return (
+    <div className="flex min-h-0 min-w-0 flex-1 divide-x bg-background" data-circuit-panel>
+      <CircuitPane
+        project={project}
+        entryFile={entryFile}
+        viewerFiles={viewerFiles}
+        cwd={cwd}
+        failed={projectState.status === "failed"}
+        composerDraftTarget={props.composerDraftTarget}
+        initialView={preferredViewFrom(
+          getLocalStorageItem(PREFERRED_VIEW_STORAGE_KEY, Schema.String),
+        )}
+        persistPreference
+        label="Primary circuit view"
+        actions={(view) => (
+          <Button
+            ref={splitButton}
+            size="sm"
+            variant="outline"
+            disabled={secondaryView !== null}
+            onClick={() => setSecondaryView(secondCircuitView(view))}
+          >
+            Split view
+          </Button>
+        )}
+      />
+      {secondaryView === null ? null : (
+        <CircuitPane
+          project={project}
+          entryFile={entryFile}
+          viewerFiles={viewerFiles}
+          cwd={cwd}
+          failed={projectState.status === "failed"}
+          composerDraftTarget={props.composerDraftTarget}
+          initialView={secondaryView}
+          persistPreference={false}
+          label="Secondary circuit view"
+          actions={() => (
+            <Button
+              size="sm"
+              variant="outline"
+              aria-label="Close split view"
+              title="Close split view"
+              onClick={closeSplit}
+            >
+              ×
+            </Button>
+          )}
+        />
+      )}
+    </div>
+  );
+}
+
+function CircuitPane(props: {
+  readonly project: LoadedProject | null;
+  readonly entryFile: string | null;
+  readonly viewerFiles: ViewerFiles | null;
+  readonly cwd: string | undefined;
+  readonly failed: boolean;
+  readonly composerDraftTarget: ComposerThreadTarget;
+  readonly initialView: CircuitViewId;
+  readonly persistPreference: boolean;
+  readonly label: string;
+  readonly actions: (view: CircuitPanelState["view"]) => React.ReactNode;
+}) {
+  const { project, entryFile, viewerFiles, cwd } = props;
+  const [viewerAttempt, setViewerAttempt] = useState(0);
+  const [panelState, dispatch] = useReducer(
+    circuitPanelReducer,
+    props.initialView,
+    initialCircuitPanelState,
+  );
+  const [helpFor, setHelpFor] = useState<StandingViewId | null>(null);
   const view = viewStateForFile(panelState, entryFile);
   const notice = !cwd ? (
     <Notice title="No project folder" description="Open a project to see its circuit here." />
-  ) : projectState.status === "failed" ? (
+  ) : props.failed ? (
     <Notice
       title="Couldn't read the project"
       description="The project's files could not be read from this environment."
@@ -288,7 +364,7 @@ export default function CircuitPanel(props: {
       if (hasStandingTab(screen)) setHelpFor(screen);
       return;
     }
-    if (canBePreferred(screen)) {
+    if (props.persistPreference && canBePreferred(screen)) {
       setLocalStorageItem(PREFERRED_VIEW_STORAGE_KEY, screen, Schema.String);
     }
     dispatch({ type: "user_picked", file: entryFile, screen });
@@ -302,17 +378,19 @@ export default function CircuitPanel(props: {
   };
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col bg-background" data-circuit-panel>
-      {entryFile === null ? null : (
-        <CircuitViewTabs
-          tabs={viewTabs(view)}
-          screen={view.screen}
-          unmuted={unmuted}
-          errorCount={countErrors(view.counts) + (view.executionError === null ? 0 : 1)}
-          running={view.running}
-          onPick={pickScreen}
-        />
-      )}
+    <section
+      className="flex min-h-0 min-w-0 flex-1 flex-col bg-background"
+      aria-label={props.label}
+    >
+      <CircuitViewTabs
+        tabs={entryFile === null ? [] : viewTabs(view)}
+        screen={view.screen}
+        unmuted={unmuted}
+        errorCount={countErrors(view.counts) + (view.executionError === null ? 0 : 1)}
+        running={view.running}
+        onPick={pickScreen}
+        actions={props.actions(view)}
+      />
       <div className="relative flex min-h-0 flex-1 flex-col">
         <CircuitViewer
           key={viewerAttempt}
@@ -341,7 +419,7 @@ export default function CircuitPanel(props: {
         onClose={() => setHelpFor(null)}
         onAddToPrompt={addToPrompt}
       />
-    </div>
+    </section>
   );
 }
 
@@ -371,6 +449,7 @@ function CircuitViewTabs(props: {
   readonly errorCount: number;
   readonly running: boolean;
   readonly onPick: (screen: CircuitScreen) => void;
+  readonly actions: React.ReactNode;
 }) {
   return (
     <div className={cn(FILE_SURFACE_SUBHEADER_CLASS, "justify-between")}>
@@ -413,7 +492,10 @@ function CircuitViewTabs(props: {
           ) : null}
         </ToggleGroup>
       </div>
-      {props.running ? <Spinner className="size-3.5" /> : null}
+      <div className="flex shrink-0 items-center gap-2">
+        {props.running ? <Spinner className="size-3.5" /> : null}
+        {props.actions}
+      </div>
     </div>
   );
 }
