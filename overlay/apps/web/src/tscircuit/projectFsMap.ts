@@ -57,6 +57,17 @@ export function pickEntryFile(fsMap: ProjectFsMap): string | null {
   return circuits.find((path) => /\.circuit\.tsx$/i.test(path)) ?? circuits[0] ?? null;
 }
 
+/** An explicitly opened file must not silently change to the project's entry file. */
+export const selectedCircuitFile = (
+  fsMap: ProjectFsMap,
+  relativePath: string | null,
+): string | null =>
+  relativePath === null
+    ? pickEntryFile(fsMap)
+    : Object.hasOwn(fsMap, relativePath)
+      ? relativePath
+      : null;
+
 /** Shallowest first, then by name. */
 function tsxFiles(fsMap: ProjectFsMap): string[] {
   const depth = (path: string) => path.split("/").length;
@@ -175,6 +186,7 @@ export async function readProject(reader: ProjectReader): Promise<LoadedProject>
     for (const [index, listing] of listings.entries()) {
       const forViewer = directories[index]?.forViewer === true;
       if (listing === null) {
+        if (forViewer) throw new Error("Could not list project files");
         hashable = false;
         continue;
       }
@@ -248,8 +260,9 @@ export async function readProject(reader: ProjectReader): Promise<LoadedProject>
   await readFiles(
     wanted,
     (path, file) => {
+      if (file === null) throw new Error(`Could not read project file: ${path}`);
       keepForHash(path, file);
-      if (file === null || file.exists === false) return;
+      if (file.exists === false) return;
       if (file.truncated || totalBytes + file.byteLength > MAX_TOTAL_BYTES) {
         truncated = true;
         return;

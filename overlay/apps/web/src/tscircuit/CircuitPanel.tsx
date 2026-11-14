@@ -44,9 +44,9 @@ import { openOrderPane } from "./orderActions";
 import {
   type LoadedProject,
   loadProjectFsMap,
-  pickEntryFile,
   type ProjectFsMap,
   readBuiltCircuitJson,
+  selectedCircuitFile,
 } from "./projectFsMap";
 import {
   parseViewerMessage,
@@ -290,12 +290,7 @@ export default function CircuitPanel(props: {
     };
   }, [environmentId, cwd, workspaceMutationId, visible, pollForEdits]);
 
-  const entryFile =
-    project === null
-      ? null
-      : relativePath !== null && relativePath in project.fsMap
-        ? relativePath
-        : pickEntryFile(project.fsMap);
+  const entryFile = project === null ? null : selectedCircuitFile(project.fsMap, relativePath);
 
   const built = useBuiltCircuit({
     environmentId,
@@ -326,6 +321,11 @@ export default function CircuitPanel(props: {
     />
   ) : project === null ? (
     <Notice title="Reading project files" busy />
+  ) : relativePath !== null && entryFile === null ? (
+    <Notice
+      title="File unavailable"
+      description="This file was deleted or could not be included in the circuit preview."
+    />
   ) : entryFile === null ? (
     <Notice
       title="No circuit yet"
@@ -377,7 +377,7 @@ export default function CircuitPanel(props: {
       )}
       <div className="relative flex min-h-0 flex-1 flex-col">
         <CircuitViewer
-          key={viewerAttempt}
+          key={`${viewerAttempt}:${entryFile ?? ""}`}
           file={entryFile}
           files={viewerFiles}
           screen={view.screen}
