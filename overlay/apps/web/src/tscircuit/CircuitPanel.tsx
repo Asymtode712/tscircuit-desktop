@@ -273,17 +273,12 @@ export default function CircuitPanel(props: {
         )}
         persistPreference
         label="Primary circuit view"
-        actions={(view) => (
-          <Button
-            ref={splitButton}
-            size="sm"
-            variant="outline"
-            disabled={secondaryView !== null}
-            onClick={() => setSecondaryView(secondCircuitView(view))}
-          >
-            Split view
-          </Button>
-        )}
+        splitControl={{
+          kind: "split",
+          buttonRef: splitButton,
+          disabled: secondaryView !== null,
+          onSplit: setSecondaryView,
+        }}
       />
       {secondaryView === null ? null : (
         <CircuitPane
@@ -296,17 +291,7 @@ export default function CircuitPanel(props: {
           initialView={secondaryView}
           persistPreference={false}
           label="Secondary circuit view"
-          actions={() => (
-            <Button
-              size="sm"
-              variant="outline"
-              aria-label="Close split view"
-              title="Close split view"
-              onClick={closeSplit}
-            >
-              ×
-            </Button>
-          )}
+          splitControl={{ kind: "close", onClose: closeSplit }}
         />
       )}
     </div>
@@ -323,9 +308,16 @@ function CircuitPane(props: {
   readonly initialView: CircuitViewId;
   readonly persistPreference: boolean;
   readonly label: string;
-  readonly actions: (view: CircuitPanelState["view"]) => React.ReactNode;
+  readonly splitControl:
+    | {
+        readonly kind: "split";
+        readonly buttonRef: React.RefObject<HTMLButtonElement | null>;
+        readonly disabled: boolean;
+        readonly onSplit: (view: CircuitViewId) => void;
+      }
+    | { readonly kind: "close"; readonly onClose: () => void };
 }) {
-  const { project, entryFile, viewerFiles, cwd } = props;
+  const { project, entryFile, viewerFiles, cwd, splitControl } = props;
   const [viewerAttempt, setViewerAttempt] = useState(0);
   const [panelState, dispatch] = useReducer(
     circuitPanelReducer,
@@ -389,7 +381,29 @@ function CircuitPane(props: {
         errorCount={countErrors(view.counts) + (view.executionError === null ? 0 : 1)}
         running={view.running}
         onPick={pickScreen}
-        actions={props.actions(view)}
+        actions={
+          splitControl.kind === "split" ? (
+            <Button
+              ref={splitControl.buttonRef}
+              size="sm"
+              variant="outline"
+              disabled={splitControl.disabled}
+              onClick={() => splitControl.onSplit(secondCircuitView(view))}
+            >
+              Split view
+            </Button>
+          ) : (
+            <Button
+              size="sm"
+              variant="outline"
+              aria-label="Close split view"
+              title="Close split view"
+              onClick={splitControl.onClose}
+            >
+              ×
+            </Button>
+          )
+        }
       />
       <div className="relative flex min-h-0 flex-1 flex-col">
         <CircuitViewer
