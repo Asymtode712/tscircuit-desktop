@@ -72,18 +72,12 @@ it("caps the split at two, isolates pane navigation/errors, and closes with focu
   await act(() => rendered(rightFrame));
   await act(() => {
     send(leftFrame, {
-      runframe_type: "runframe_event",
-      runframe_event: {
-        type: "autorouter_phases",
-        phases: [{ id: "primary-route", status: "complete" }],
-      },
+      tscircuit_desktop_type: "autorouter_phases",
+      phases: [{ id: "primary-route", status: "complete" }],
     });
     send(rightFrame, {
-      runframe_type: "runframe_event",
-      runframe_event: {
-        type: "autorouter_phases",
-        phases: [{ id: "comparison-route", status: "complete" }],
-      },
+      tscircuit_desktop_type: "autorouter_phases",
+      phases: [{ id: "comparison-route", status: "complete" }],
     });
   });
   await vi.waitFor(() => {
