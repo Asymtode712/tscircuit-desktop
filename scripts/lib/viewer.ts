@@ -17,7 +17,6 @@
  */
 import { createHash } from "node:crypto"
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs"
-import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { fail, run, step } from "./exec.ts"
 import { checkoutDir, repoRoot } from "./paths.ts"
@@ -66,7 +65,9 @@ interface PackageFiles {
 
 /** Downloads an npm package, checks it against the registry's hash, and unpacks it. */
 function fetchPackage(name: string, versionOrTag: string, options: Sources): PackageFiles {
-  const scratch = mkdtempSync(join(tmpdir(), "tscircuit-desktop-viewer-"))
+  // The unpacked directory is renamed into the cache, which can be on another volume than the OS temp directory.
+  mkdirSync(options.cacheDir, { recursive: true })
+  const scratch = mkdtempSync(join(options.cacheDir, ".download-"))
   try {
     const metadataFile = join(scratch, "metadata.json")
     download(`${options.registry}/${name}/${versionOrTag}`, metadataFile)
@@ -86,7 +87,6 @@ function fetchPackage(name: string, versionOrTag: string, options: Sources): Pac
       const unpacked = join(scratch, "unpacked")
       mkdirSync(unpacked)
       run("tar", ["-xzf", tarball, "-C", unpacked])
-      mkdirSync(dirname(folder), { recursive: true })
       rmSync(folder, { recursive: true, force: true })
       renameSync(unpacked, folder)
     }

@@ -1,0 +1,31 @@
+Use standalone’s Azure Artifact Signing hook on Windows so Electron Builder signs and verifies the app, native binaries, installer, and uninstaller as it packages them.
+Allow up to 100 Windows payload files. The desktop x64 build currently ships 90.
+
+diff --git a/scripts/build-desktop-artifact.ts b/scripts/build-desktop-artifact.ts
+index 6668d46544bbe17d235b312b99f28aa8cd11bc48..4fc1dfb1f5518922338c7b414c75e7b738e1460e 100644
+--- a/scripts/build-desktop-artifact.ts
++++ b/scripts/build-desktop-artifact.ts
+@@ -1061,7 +1061,7 @@ export function resolveWindowsServerAsarIgnoreGlobs(arch: typeof BuildArch.Type)
+   ];
+ }
+ 
+-export const WINDOWS_PACKAGED_PAYLOAD_FILE_LIMIT = 80;
++export const WINDOWS_PACKAGED_PAYLOAD_FILE_LIMIT = 100;
+ export const WINDOWS_SERVER_RESOURCE_SOURCE_DIR = "apps/desktop/prod-resources/windows-server";
+ export const WINDOWS_SERVER_EXTRA_RESOURCES = [
+   {
+@@ -2964,7 +2964,13 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
+       signAndEditExecutable: true,
+     };
+     if (signed && (yield* HostProcess.Platform) === "win32") {
+-      winConfig.azureSignOptions = yield* AzureTrustedSigningOptionsConfig;
++      const path = yield* Path.Path;
++      buildConfig.forceCodeSigning = true;
++      winConfig.signtoolOptions = {
++        sign: yield* path.fromFileUrl(new URL("./tscircuit-windows/sign.cjs", import.meta.url)),
++        signingHashAlgorithms: ["sha256"],
++        publisherName: ["tscircuit Inc"],
++      };
+     } else if (signed) {
+       const path = yield* Path.Path;
+       const { publisherName } = yield* AzureTrustedSigningOptionsConfig;

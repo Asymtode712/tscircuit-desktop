@@ -1,0 +1,99 @@
+name: Build Windows x64 installer
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        required: true
+        type: string
+      sign:
+        required: true
+        type: boolean
+
+jobs:
+  build:
+    name: Windows x64
+    runs-on: windows-2025
+    timeout-minutes: 60
+    environment: ${{ inputs.sign && 'windows-signing' || '' }}
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Configure Git for the overlay patches
+        run: |
+          git config --global core.autocrlf false
+          git config --global core.longpaths true
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Prepare the desktop overlay
+        run: node scripts/setup.ts --no-install
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .t3code/package.json
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: .t3code/package.json
+      - name: Install dependencies
+        working-directory: .t3code
+        run: pnpm install --frozen-lockfile
+      - name: Set up the Rust target
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+        with:
+          toolchain: stable
+          targets: x86_64-pc-windows-msvc
+      - name: Install the Microsoft signing module
+        if: inputs.sign
+        run: ./.t3code/scripts/tscircuit-windows/install-signing.ps1
+      - name: Authenticate to Azure with GitHub OIDC
+        if: inputs.sign
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Package the Windows installer
+        env:
+          BUILD_VERSION: ${{ inputs.version }}
+          AZURE_SIGNING_ENDPOINT: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+          AZURE_SIGNING_ACCOUNT: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+          AZURE_SIGNING_PROFILE: ${{ vars.AZURE_SIGNING_PROFILE }}
+        run: |
+          Remove-Item Env:GITHUB_REPOSITORY
+          $buildArgs = @('--platform', 'win', '--target', 'nsis', '--arch', 'x64', '--build-version', $env:BUILD_VERSION, '--verbose')
+          if ('${{ inputs.sign }}' -eq 'true') {
+            $buildArgs += '--signed'
+          }
+          node scripts/run.ts vp run dist:desktop:artifact @buildArgs
+      - name: Verify the installer and installation
+        timeout-minutes: 5
+        env:
+          BUILD_VERSION: ${{ inputs.version }}
+        run: |
+          $installer = (Get-Item -LiteralPath ".t3code/release/tscircuit-desktop-$env:BUILD_VERSION-x64.exe").FullName
+          $verify = './.t3code/scripts/tscircuit-windows/verify-signature.ps1'
+          $signed = '${{ inputs.sign }}' -eq 'true'
+          if ($signed) { & $verify -Path $installer | Out-Null }
+
+          $installDir = Join-Path $env:RUNNER_TEMP 'tscircuit-desktop-smoke'
+          $process = Start-Process -FilePath $installer -ArgumentList "/S /D=$installDir" -PassThru -Wait
+          if ($process.ExitCode -ne 0) { throw "Windows installer exited with code $($process.ExitCode)" }
+
+          $app = Get-Item -LiteralPath (Join-Path $installDir 'tscircuit desktop.exe')
+          $uninstaller = Get-Item -LiteralPath (Join-Path $installDir 'Uninstall tscircuit desktop.exe')
+          if ($signed) {
+            & $verify -Path $app.FullName | Out-Null
+            & $verify -Path $uninstaller.FullName | Out-Null
+            Write-Host 'Verified timestamped Authenticode signatures for the installer, app and uninstaller.'
+          }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tscircuit-desktop-windows-x64
+          path: .t3code/release/tscircuit-desktop-${{ inputs.version }}-x64.exe
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0

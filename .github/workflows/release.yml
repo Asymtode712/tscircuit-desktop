@@ -1,19 +1,19 @@
 name: Release
 
-# Builds tscircuit desktop for Apple Silicon Macs.
+# Builds tscircuit desktop for Apple Silicon Macs and Windows x64.
 #
 #   - On every push to main it publishes a GitHub release, v<major>.<minor>.<run>.
 #     Major and minor come from "version" in package.json; the last number is
 #     this workflow's run number, so no commit is needed to bump it.
 #   - On a pull request that changes the app or this file it only builds, and
-#     keeps the zip as a workflow artifact, so the build can be tried before
+#     keeps the packages as workflow artifacts, so the build can be tried before
 #     merging.
 #
-# Each build is signed with tscircuit's Apple Developer ID and notarized by
+# Each Mac release is signed with tscircuit's Apple Developer ID and notarized by
 # Apple (scripts/sign-macos.sh), so macOS opens a downloaded copy without
 # complaint. The credentials are the secrets tscircuit-standalone signs with.
 # A pull request from a fork gets no secrets; its build is signed ad hoc, for
-# trying out only. A release is never published without a Developer ID.
+# trying out only. Windows releases use Azure Artifact Signing on main.
 #
 # The app does not update itself yet: the build is made without an update feed,
 # and the app says updates are unavailable. See "Releases and automatic
@@ -28,6 +28,7 @@ on:
   pull_request:
     paths:
       - .github/workflows/release.yml
+      - .github/workflows/build-windows.yml
       - upstream.json
       - renames.json
       - skill.json
@@ -40,17 +41,17 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  mac:
-    name: Apple Silicon
-    runs-on: macos-15
-    timeout-minutes: 90
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -67,6 +68,17 @@ jobs:
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "Version $version"
+
+  mac:
+    name: Apple Silicon
+    runs-on: macos-15
+    needs: version
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
 
       # Builds .t3code/ from the pin, renames.json, overlay/ and patches/, and
       # downloads what skill.json and viewer.json name.
@@ -87,7 +99,7 @@ jobs:
         run: |
           env -u GITHUB_REPOSITORY node scripts/run.ts vp run dist:desktop:artifact \
             --platform mac --target zip --arch arm64 \
-            --build-version "${{ steps.version.outputs.version }}" --verbose
+            --build-version "${{ needs.version.outputs.version }}" --verbose
 
       # The build script signs only when T3 Code's own passkey sign-in is set
       # up, so it leaves the app bundle unsigned: only the program file keeps
@@ -128,23 +140,61 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: tscircuit-desktop-mac-arm64
-          path: out/*.zip
+          path: |
+            out/*.dmg
+            out/*.zip
           if-no-files-found: error
           retention-days: 14
           compression-level: 0
 
+  windows-preview:
+    if: github.ref != 'refs/heads/main' || github.event_name == 'pull_request'
+    needs: version
+    uses: ./.github/workflows/build-windows.yml
+    with:
+      version: ${{ needs.version.outputs.version }}
+      sign: false
+
+  windows:
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    needs: version
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/build-windows.yml
+    with:
+      version: ${{ needs.version.outputs.version }}
+      sign: true
+
+  publish:
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    needs: [version, mac, windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: tscircuit-desktop-mac-arm64
+          path: out
+      - uses: actions/download-artifact@v4
+        with:
+          name: tscircuit-desktop-windows-x64
+          path: out
       - name: Publish the release
-        if: github.event_name != 'pull_request'
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ steps.version.outputs.version }}
+          VERSION: ${{ needs.version.outputs.version }}
         run: |
           cat > "$RUNNER_TEMP/notes.md" <<'NOTES'
           **Install on an Apple Silicon Mac:** download the `.dmg`, open it, and drag tscircuit desktop to Applications.
 
-          This build is signed with tscircuit's Apple Developer ID and notarized by Apple. It does not update itself: download a newer release to update.
+          **Install on Windows x64:** download and run the `.exe` installer.
+
+          The Mac app is signed and notarized by Apple. The Windows installer is signed by tscircuit Inc through Azure Artifact Signing. Download a newer release to update.
           NOTES
-          gh release create "v$VERSION" out/*.dmg out/*.zip \
+          gh release create "v$VERSION" out/*.dmg out/*.zip out/*.exe \
+            --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
             --title "tscircuit desktop $VERSION" \
             --notes-file "$RUNNER_TEMP/notes.md" \
