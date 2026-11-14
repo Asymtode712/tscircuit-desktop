@@ -132,6 +132,8 @@ jobs:
             feed=true
             echo "The app's update feed (app-update.yml):"
             cat "$app/Contents/Resources/app-update.yml"
+            # T3 Code's own download folder would be shared with T3 Code.
+            grep -qx 'updaterCacheDirName: tscircuit-desktop-updater' "$app/Contents/Resources/app-update.yml"
           elif [ "$GITHUB_EVENT_NAME" != "pull_request" ]; then
             echo "::error::The build gave the app no update feed, so this release could not update itself."
             exit 1

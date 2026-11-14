@@ -104,6 +104,14 @@ jobs:
           if ($process.ExitCode -ne 0) { throw "Windows installer exited with code $($process.ExitCode)" }
 
           $app = Get-Item -LiteralPath (Join-Path $installDir 'tscircuit desktop.exe')
+          # A build with an update feed keeps its downloads apart from T3 Code's.
+          $feed = Join-Path $installDir 'resources/app-update.yml'
+          if (Test-Path -LiteralPath '.t3code/release/latest.yml') {
+            Get-Content -LiteralPath $feed
+            if (-not (Select-String -LiteralPath $feed -Pattern '^updaterCacheDirName: tscircuit-desktop-updater$' -Quiet)) {
+              throw 'The installed app would share its update downloads with T3 Code.'
+            }
+          }
           $uninstaller = Get-Item -LiteralPath (Join-Path $installDir 'Uninstall tscircuit desktop.exe')
           if ($signed) {
             & $verify -Path $app.FullName | Out-Null
