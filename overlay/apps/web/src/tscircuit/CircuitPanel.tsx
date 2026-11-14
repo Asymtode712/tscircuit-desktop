@@ -1,6 +1,6 @@
 import type { EnvironmentId } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
-import { type Dispatch, useEffect, useReducer, useRef, useState } from "react";
+import { type Dispatch, type RefObject, useEffect, useReducer, useRef, useState } from "react";
 
 import { ReadOnlySourcePreview } from "~/components/files/AttachmentFilePreview";
 import { FILE_SURFACE_SUBHEADER_CLASS } from "~/components/files/fileSurfaceChrome";
@@ -16,6 +16,9 @@ import { getLocalStorageItem, setLocalStorageItem } from "~/hooks/useLocalStorag
 import { cn } from "~/lib/utils";
 
 import { expectedBuild, isBuildOfSources } from "./builtCircuit";
+import type { AutorouterPhase } from "./autorouterPhases";
+import { AutorouterReportDialog } from "./AutorouterReportDialog";
+import { useAutorouterReportRequest } from "./autorouterReportRequest";
 import { type CircuitViewHelp, CircuitViewHelpDialog } from "./CircuitViewHelpDialog";
 import {
   appendToPrompt,
@@ -43,7 +46,12 @@ import {
   type ProjectFsMap,
   readBuiltCircuitJson,
 } from "./projectFsMap";
-import { parseViewerMessage, viewerFileProps, viewerTabProps } from "./runframeMessages";
+import {
+  parseViewerMessage,
+  phaseInputRequest,
+  viewerFileProps,
+  viewerTabProps,
+} from "./runframeMessages";
 import { viewerFrame } from "./viewerFrame";
 
 /**
@@ -56,12 +64,53 @@ const VIEWER_FRAME = viewerFrame({
   baseUrl: import.meta.env.BASE_URL,
 });
 const VIEWER_LOAD_TIMEOUT_MS = 30_000;
+/** The viewer answers from memory, so one that has not answered by now will not. */
+const PHASE_INPUT_TIMEOUT_MS = 10_000;
 const REFRESH_INTERVAL_MS = 3_000;
 /** Larger projects refresh on focus and after agent work, not on a timer. */
 const MAX_FILES_TO_POLL = 40;
 const PREFERRED_VIEW_STORAGE_KEY = "tscircuit-desktop:circuit-view";
 
 type PanelAction = CircuitViewAction & { readonly file: string };
+
+/**
+ * The autorouting phases of the viewer's run of a file's sources. Showing a build
+ * runs nothing, so there are none until the sources are run.
+ */
+interface FilePhases {
+  readonly file: string;
+  readonly phases: ReadonlyArray<AutorouterPhase>;
+}
+
+let phaseInputRequestCount = 0;
+
+/**
+ * Asks the viewer frame for the Simple Route JSON a phase of its last run
+ * started from. Null when the viewer has none, or does not answer.
+ */
+function loadPhaseInput(frame: HTMLIFrameElement | null, phaseId: string): Promise<unknown> {
+  const viewer = frame?.contentWindow;
+  if (!viewer) return Promise.resolve(null);
+  phaseInputRequestCount += 1;
+  const requestId = String(phaseInputRequestCount);
+  return new Promise((resolve) => {
+    const finish = (simpleRouteJson: unknown) => {
+      window.removeEventListener("message", onMessage);
+      window.clearTimeout(timeout);
+      resolve(simpleRouteJson);
+    };
+    const onMessage = (event: MessageEvent) => {
+      if (event.source !== viewer) return;
+      const message = parseViewerMessage(event.data);
+      if (message?.kind === "autorouter_phase_input" && message.requestId === requestId) {
+        finish(message.simpleRouteJson);
+      }
+    };
+    const timeout = window.setTimeout(() => finish(null), PHASE_INPUT_TIMEOUT_MS);
+    window.addEventListener("message", onMessage);
+    viewer.postMessage(phaseInputRequest(requestId, phaseId), VIEWER_FRAME.targetOrigin);
+  });
+}
 
 type ProjectState =
   | { readonly status: "loading" }
@@ -187,6 +236,11 @@ export default function CircuitPanel(props: {
   );
   const [helpFor, setHelpFor] = useState<StandingViewId | null>(null);
   const [projectState, setProjectState] = useState<ProjectState>({ status: "loading" });
+  const [filePhases, setFilePhases] = useState<FilePhases | null>(null);
+  const [rebuilds, setRebuilds] = useState(0);
+  const [viewerFailed, setViewerFailed] = useState(false);
+  const frameRef = useRef<HTMLIFrameElement>(null);
+  const reporting = useAutorouterReportRequest((request) => request.requested) && visible;
 
   const project = projectState.status === "ready" ? projectState.project : null;
   const pollForEdits = project === null || Object.keys(project.fsMap).length <= MAX_FILES_TO_POLL;
@@ -250,10 +304,11 @@ export default function CircuitPanel(props: {
         : expectedBuild(entryFile, project.hashedFiles),
   });
   // Nothing new goes to the viewer until it is known whether there is a build to show instead.
+  // A report needs the routing problems, which only a run of the sources has.
   const viewerFiles =
     project === null || entryFile === null || built.status === "checking"
       ? null
-      : built.status === "current"
+      : built.status === "current" && !reporting
         ? built.files
         : { fsMap: project.fsMap, mainComponentPath: entryFile };
 
@@ -277,6 +332,8 @@ export default function CircuitPanel(props: {
     <Notice title="Reading project files" busy />
   ) : null;
 
+  // Null until the viewer has started a run of this file's sources.
+  const phases = filePhases !== null && filePhases.file === entryFile ? filePhases.phases : null;
   const source = entryFile === null ? null : (project?.fsMap[entryFile] ?? null);
   const unmuted = unmutedViews(view);
   const help =
@@ -320,8 +377,15 @@ export default function CircuitPanel(props: {
           files={viewerFiles}
           screen={view.screen}
           covered={notice !== null || view.screen === "source"}
+          rebuilds={rebuilds}
           dispatch={dispatch}
-          onRetry={() => setViewerAttempt((attempt) => attempt + 1)}
+          onPhases={setFilePhases}
+          onStartFailed={setViewerFailed}
+          onRetry={() => {
+            setViewerFailed(false);
+            setViewerAttempt((attempt) => attempt + 1);
+          }}
+          frameRef={frameRef}
         />
         {notice !== null ? (
           <Cover>{notice}</Cover>
@@ -340,6 +404,38 @@ export default function CircuitPanel(props: {
         help={help}
         onClose={() => setHelpFor(null)}
         onAddToPrompt={addToPrompt}
+      />
+      <AutorouterReportDialog
+        open={reporting}
+        cwd={cwd}
+        file={entryFile}
+        build={
+          !cwd
+            ? { state: "unavailable", reason: "Open a project to report its circuit's routing." }
+            : projectState.status === "failed"
+              ? {
+                  state: "unavailable",
+                  reason: "The project's files could not be read, so its circuit was not built.",
+                }
+              : project !== null && entryFile === null
+                ? { state: "unavailable", reason: "This project has no circuit to build yet." }
+                : viewerFailed
+                  ? {
+                      state: "unavailable",
+                      reason:
+                        "The circuit viewer didn't start, so the circuit was not built. Close this and choose Try again.",
+                    }
+                  : {
+                      state:
+                        view.running || (phases === null && view.executionError === null)
+                          ? "building"
+                          : "built",
+                    }
+        }
+        phases={phases ?? []}
+        onRebuild={() => setRebuilds((count) => count + 1)}
+        loadPhaseInput={(phaseId) => loadPhaseInput(frameRef.current, phaseId)}
+        onClose={() => useAutorouterReportRequest.setState({ requested: false })}
       />
     </div>
   );
@@ -430,64 +526,86 @@ function CircuitViewer(props: {
   readonly screen: CircuitScreen;
   /** True while the panel shows a notice or the source over the frame. */
   readonly covered: boolean;
+  /** Raised to run the same files again. */
+  readonly rebuilds: number;
   readonly dispatch: Dispatch<PanelAction>;
+  /** The phases of the run in the viewer. Null once it is sent files it has not run yet. */
+  readonly onPhases: (phases: FilePhases | null) => void;
+  readonly onStartFailed: (failed: boolean) => void;
   readonly onRetry: () => void;
+  readonly frameRef: RefObject<HTMLIFrameElement | null>;
 }) {
-  const { file, screen, covered, dispatch, onRetry } = props;
+  const { file, screen, covered, rebuilds, dispatch, onRetry } = props;
+  const { onPhases, onStartFailed, frameRef } = props;
   const fsMap = props.files?.fsMap ?? null;
   const mainComponentPath = props.files?.mainComponentPath ?? null;
-  const frameRef = useRef<HTMLIFrameElement>(null);
   const [state, setState] = useState<"loading" | "ready" | "failed">("loading");
   // What the viewer last received. Its events are about the file named here.
-  const sentRef = useRef<({ readonly file: string } & ViewerFiles) | null>(null);
+  const sentRef = useRef<
+    ({ readonly file: string; readonly rebuilds: number } & ViewerFiles) | null
+  >(null);
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- subscribes to the viewer frame's messages and gives up waiting for it after a timeout
   useEffect(() => {
+    let ready = false;
     const onMessage = (event: MessageEvent) => {
       // In a browser the frame's origin is "null", so its window is what names it.
       if (event.source !== frameRef.current?.contentWindow) return;
       const message = parseViewerMessage(event.data);
       if (message === null) return;
       if (message.kind === "ready") {
+        ready = true;
         setState("ready");
         return;
       }
+      // The answer to a question the report dialog asked, which listens for it itself.
+      if (message.kind === "autorouter_phase_input") return;
       const sentFile = sentRef.current?.file;
       if (sentFile === undefined) return;
+      if (message.kind === "autorouter_phases") {
+        onPhases({ file: sentFile, phases: message.phases });
+        return;
+      }
       const { kind, ...detail } = message;
       dispatch({ type: kind, file: sentFile, ...detail } as PanelAction);
     };
     window.addEventListener("message", onMessage);
-    const timeout = window.setTimeout(
-      () => setState((current) => (current === "loading" ? "failed" : current)),
-      VIEWER_LOAD_TIMEOUT_MS,
-    );
+    const timeout = window.setTimeout(() => {
+      if (ready) return;
+      setState("failed");
+      onStartFailed(true);
+    }, VIEWER_LOAD_TIMEOUT_MS);
     return () => {
       window.removeEventListener("message", onMessage);
       window.clearTimeout(timeout);
     };
-  }, [dispatch]);
+  }, [dispatch, onPhases, onStartFailed, frameRef]);
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- sends the files and the tab to show to the viewer frame, an external system
   useEffect(() => {
     if (state !== "ready" || file === null || fsMap === null || mainComponentPath === null) return;
     const sent = sentRef.current;
     const filesChanged =
-      sent?.file !== file || sent.fsMap !== fsMap || sent.mainComponentPath !== mainComponentPath;
+      sent?.file !== file ||
+      sent.fsMap !== fsMap ||
+      sent.mainComponentPath !== mainComponentPath ||
+      sent.rebuilds !== rebuilds;
     frameRef.current?.contentWindow?.postMessage(
       {
         runframe_type: "runframe_props_changed",
         // The files go once: resending them would run the circuit again for a change of tab.
         runframe_props: filesChanged
-          ? viewerFileProps({ fsMap, mainComponentPath, screen })
+          ? viewerFileProps({ fsMap, mainComponentPath, screen, rebuilds })
           : viewerTabProps(screen),
       },
       VIEWER_FRAME.targetOrigin,
     );
     if (!filesChanged) return;
-    sentRef.current = { file, fsMap, mainComponentPath };
+    sentRef.current = { file, fsMap, mainComponentPath, rebuilds };
+    // The phases the viewer reported were of what it had before.
+    onPhases(null);
     dispatch({ type: "files_sent", file });
-  }, [state, file, fsMap, mainComponentPath, screen, dispatch]);
+  }, [state, file, fsMap, mainComponentPath, screen, rebuilds, dispatch, onPhases, frameRef]);
 
   return (
     <>

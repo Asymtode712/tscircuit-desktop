@@ -127,6 +127,13 @@ export function bundleViewer(source: ViewerSource): void {
     )
   }
 
+  // An autorouter bug report reads the routing problems of a run off the eval worker RunFrame keeps here.
+  if (!runframe.includes("runFrameWorker")) {
+    fail(
+      `tscircuit ${tscircuit.version} cannot be used as the circuit viewer: its RunFrame no longer keeps its eval worker in globalThis.runFrameWorker, which the viewer's page listens on to report autorouter bugs. Change overlay/apps/web/public/tscircuit-viewer/frame.html to follow it.`,
+    )
+  }
+
   const tscircuitManifest = JSON.parse(tscircuit.read("package.json").toString("utf8")) as {
     dependencies?: Record<string, string>
   }

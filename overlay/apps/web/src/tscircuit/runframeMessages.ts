@@ -1,3 +1,4 @@
+import { type AutorouterPhase, readAutorouterPhases } from "./autorouterPhases";
 import type { CircuitScreen, ElementCounts } from "./circuitViews";
 
 /** What the viewer frame tells the app. Null for a message that is not one of these. */
@@ -7,7 +8,15 @@ export type ViewerMessage =
   | { readonly kind: "circuit_rendered"; readonly counts: ElementCounts }
   | { readonly kind: "run_completed"; readonly failed: boolean }
   | { readonly kind: "run_failed"; readonly message: string }
-  | { readonly kind: "tab_requested"; readonly tab: string };
+  | { readonly kind: "tab_requested"; readonly tab: string }
+  /** The autorouting phases of the run so far. Empty when a run starts. */
+  | { readonly kind: "autorouter_phases"; readonly phases: ReadonlyArray<AutorouterPhase> }
+  /** The answer to `phaseInputRequest`: what the autorouter was given, or null if it is gone. */
+  | {
+      readonly kind: "autorouter_phase_input";
+      readonly requestId: string;
+      readonly simpleRouteJson: unknown;
+    };
 
 /** What the app's header needs of RunFrame. `setup` checks the bundled copy has them. */
 const REQUIRED_CAPABILITIES = ["show_header", "active_tab", "render_events"];
@@ -24,8 +33,34 @@ function readCounts(value: unknown): ElementCounts {
   return counts;
 }
 
+/** RunFrame says nothing of autorouting to the page around it. These come from frame.html itself. */
+function parseFrameMessage(data: Record<string, unknown>): ViewerMessage | null {
+  switch (data.tscircuit_desktop_type) {
+    case "autorouter_phases":
+      return { kind: "autorouter_phases", phases: readAutorouterPhases(data.phases) };
+    case "autorouter_phase_input":
+      return typeof data.request_id === "string"
+        ? {
+            kind: "autorouter_phase_input",
+            requestId: data.request_id,
+            simpleRouteJson: data.simple_route_json ?? null,
+          }
+        : null;
+    default:
+      return null;
+  }
+}
+
+/** Asks the frame for the Simple Route JSON a phase of the last run started from. */
+export const phaseInputRequest = (requestId: string, phaseId: string) => ({
+  tscircuit_desktop_type: "get_autorouter_phase_input",
+  request_id: requestId,
+  phase_id: phaseId,
+});
+
 export function parseViewerMessage(data: unknown): ViewerMessage | null {
   if (!isRecord(data)) return null;
+  if (data.tscircuit_desktop_type !== undefined) return parseFrameMessage(data);
   if (data.runframe_type === "runframe_ready_to_receive") {
     const capabilities = Array.isArray(data.runframe_capabilities)
       ? data.runframe_capabilities
@@ -66,14 +101,22 @@ export function viewerTabProps(screen: CircuitScreen): Record<string, unknown> {
   return tab === null ? {} : { activeTab: tab };
 }
 
+const REBUILD_MARKER_FILE = ".tscircuit-desktop/rebuild";
+
 /** Everything the viewer needs to render a file. Tab-only changes send `viewerTabProps` alone. */
 export function viewerFileProps(input: {
   readonly fsMap: Record<string, string>;
   readonly mainComponentPath: string;
   readonly screen: CircuitScreen;
+  /** How many times the user asked for the same files to be built again. */
+  readonly rebuilds: number;
 }): Record<string, unknown> {
   return {
-    fsMap: input.fsMap,
+    // RunFrame runs again only when a file changed, so a rebuild changes one that no circuit reads.
+    fsMap:
+      input.rebuilds === 0
+        ? input.fsMap
+        : { ...input.fsMap, [REBUILD_MARKER_FILE]: String(input.rebuilds) },
     mainComponentPath: input.mainComponentPath,
     showHeader: false,
     showRunButton: false,
