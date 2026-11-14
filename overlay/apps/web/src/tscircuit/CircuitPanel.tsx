@@ -310,7 +310,7 @@ export default function CircuitPanel(props: {
         : { fsMap: project.fsMap, mainComponentPath: entryFile };
 
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 divide-x bg-background" data-circuit-panel>
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col divide-y bg-background" data-circuit-panel>
       <CircuitPane
         project={project}
         entryFile={entryFile}

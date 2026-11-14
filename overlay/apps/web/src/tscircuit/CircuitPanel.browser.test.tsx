@@ -44,7 +44,7 @@ function rendered(frame: HTMLIFrameElement) {
   });
 }
 
-it("caps the split at two, isolates pane navigation/errors, and closes with focus retained", async () => {
+it("stacks at most two panes, isolates navigation/errors, and closes with focus retained", async () => {
   const props = {
     environmentId: "test" as EnvironmentId,
     cwd: "/test",
@@ -59,23 +59,28 @@ it("caps the split at two, isolates pane navigation/errors, and closes with focu
     .element(screen.getByRole("button", { name: "Split view", exact: true }))
     .toBeVisible();
   await vi.waitFor(() => expect(document.querySelectorAll("iframe")).toHaveLength(1));
-  const leftFrame = document.querySelector("iframe")!;
-  await act(() => ready(leftFrame));
-  await act(() => rendered(leftFrame));
+  const topFrame = document.querySelector("iframe")!;
+  await act(() => ready(topFrame));
+  await act(() => rendered(topFrame));
   await screen.getByRole("button", { name: "Split view", exact: true }).click();
   await vi.waitFor(() => expect(document.querySelectorAll("iframe")).toHaveLength(2));
   await expect
     .element(screen.getByRole("button", { name: "Split view", exact: true }))
     .toBeDisabled();
-  const rightFrame = document.querySelectorAll("iframe")[1]!;
-  await act(() => ready(rightFrame));
-  await act(() => rendered(rightFrame));
+  const panel = document.querySelector("[data-circuit-panel]")!;
+  expect(panel.classList.contains("flex-col")).toBe(true);
+  expect(panel.classList.contains("divide-y")).toBe(true);
+  expect(panel.children[0]?.getAttribute("aria-label")).toBe("Primary circuit view");
+  expect(panel.children[1]?.getAttribute("aria-label")).toBe("Secondary circuit view");
+  const bottomFrame = document.querySelectorAll("iframe")[1]!;
+  await act(() => ready(bottomFrame));
+  await act(() => rendered(bottomFrame));
   await act(() => {
-    send(leftFrame, {
+    send(topFrame, {
       tscircuit_desktop_type: "autorouter_phases",
       phases: [{ id: "primary-route", status: "complete" }],
     });
-    send(rightFrame, {
+    send(bottomFrame, {
       tscircuit_desktop_type: "autorouter_phases",
       phases: [{ id: "comparison-route", status: "complete" }],
     });
@@ -87,32 +92,32 @@ it("caps the split at two, isolates pane navigation/errors, and closes with focu
     );
   });
   await act(() =>
-    send(rightFrame, {
+    send(bottomFrame, {
       runframe_type: "runframe_event",
       runframe_event: { type: "active_tab_changed", tab: "cad" },
     }),
   );
-  const left = document.querySelector('[aria-label="Primary circuit view"]')!;
-  const right = document.querySelector('[aria-label="Secondary circuit view"]')!;
+  const top = document.querySelector('[aria-label="Primary circuit view"]')!;
+  const bottom = document.querySelector('[aria-label="Secondary circuit view"]')!;
   await vi.waitFor(() => {
-    expect(left.textContent).not.toContain("1 error");
-    expect(right.querySelector('[data-state="on"], [aria-pressed="true"]')?.textContent).toContain(
+    expect(top.textContent).not.toContain("1 error");
+    expect(bottom.querySelector('[data-state="on"], [aria-pressed="true"]')?.textContent).toContain(
       "3D",
     );
   });
   await act(() =>
-    send(rightFrame, {
+    send(bottomFrame, {
       runframe_type: "runframe_event",
-      runframe_event: { type: "error", error_message: "Right failed" },
+      runframe_event: { type: "error", error_message: "Bottom failed" },
     }),
   );
   await vi.waitFor(() => {
-    expect(right.textContent).toContain("1 error");
-    expect(left.textContent).not.toContain("1 error");
+    expect(bottom.textContent).toContain("1 error");
+    expect(top.textContent).not.toContain("1 error");
   });
   await screen.rerender(<CircuitPanel {...props} cwd={undefined} />);
   await screen.getByRole("button", { name: "Close split view", exact: true }).click();
   expect(document.querySelectorAll("iframe")).toHaveLength(1);
-  expect(document.querySelector("iframe")).toBe(leftFrame);
+  expect(document.querySelector("iframe")).toBe(topFrame);
   expect(document.activeElement?.textContent).toBe("Split view");
 });
