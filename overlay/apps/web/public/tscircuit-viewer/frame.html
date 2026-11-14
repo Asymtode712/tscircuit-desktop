@@ -152,6 +152,32 @@
         const tellPhases = () =>
           tellApp({ tscircuit_desktop_type: "autorouter_phases", phases });
         const sameUnlessMissing = (a, b) => a === undefined || b === undefined || a === b;
+        // The app draws each routed board or group from this, so that two boards without
+        // names can be told apart. A thinned copy: a routing problem can hold thousands of pads.
+        const MAX_PREVIEW_ITEMS = 500;
+        const thinned = (list) => {
+          const step = Math.ceil(list.length / MAX_PREVIEW_ITEMS);
+          return step <= 1 ? list : list.filter((_, index) => index % step === 0);
+        };
+        const previewOf = (simpleRouteJson) => {
+          const { bounds, layerCount, outline, obstacles } = simpleRouteJson;
+          if (typeof bounds !== "object" || bounds === null) return undefined;
+          return {
+            bounds: { minX: bounds.minX, maxX: bounds.maxX, minY: bounds.minY, maxY: bounds.maxY },
+            layerCount,
+            outline: Array.isArray(outline)
+              ? thinned(outline).map((point) => [point?.x, point?.y])
+              : undefined,
+            pads: Array.isArray(obstacles)
+              ? thinned(obstacles.filter((obstacle) => obstacle?.center)).map((obstacle) => [
+                  obstacle.center.x,
+                  obstacle.center.y,
+                  obstacle.width,
+                  obstacle.height,
+                ])
+              : [],
+          };
+        };
         const recordPhaseEvent = (name, event) => {
           if (typeof event !== "object" || event === null) return;
           if (name === "autorouting:start") {
@@ -159,7 +185,10 @@
             for (const field of PHASE_FIELDS) {
               if (event[field] !== undefined && event[field] !== null) phase[field] = event[field];
             }
-            if (event.simpleRouteJson) phaseInputs.set(phase.id, event.simpleRouteJson);
+            if (event.simpleRouteJson) {
+              phaseInputs.set(phase.id, event.simpleRouteJson);
+              phase.preview = previewOf(event.simpleRouteJson);
+            }
             phases = [...phases, phase];
           } else {
             // The newest running phase of the same group that the event does not contradict.

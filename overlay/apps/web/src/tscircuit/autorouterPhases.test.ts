@@ -3,7 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   type AutorouterPhase,
   autorouterPhaseSummary,
-  autorouterPhaseTitles,
+  autorouterReportScopes,
   defaultAutorouterPhaseId,
   defaultAutorouterReportTitle,
   isSimpleRouteJson,
@@ -34,6 +34,12 @@ describe("readAutorouterPhases", () => {
           obstacleCount: 48,
           isReroutePhase: false,
           solverName: "AutoroutingPipelineSolver",
+          preview: {
+            bounds: { minX: -5, maxX: 5, minY: -3, maxY: 3 },
+            layerCount: 2,
+            outline: [[-5, -3]],
+            pads: [[1, 2, 0.5, 0.25], [1, 2, "wide"], null],
+          },
         },
         { id: "run1-phase2", status: "queued" },
         { status: "running" },
@@ -52,16 +58,26 @@ describe("readAutorouterPhases", () => {
         phaseStageCount: 2,
         connectionCount: 12,
         obstacleCount: 48,
+        preview: {
+          bounds: { minX: -5, maxX: 5, minY: -3, maxY: 3 },
+          layerCount: 2,
+          pads: [[1, 2, 0.5, 0.25]],
+        },
       },
     ]);
     expect(readAutorouterPhases("phases")).toEqual([]);
   });
 });
 
-describe("autorouterPhaseTitles", () => {
+describe("autorouterReportScopes", () => {
+  const titles = (phases: ReadonlyArray<AutorouterPhase>) =>
+    autorouterReportScopes(phases).flatMap((scope) =>
+      scope.phases.map((entry) => entry.reportTitle),
+    );
+
   it("numbers the phases of one board, and uses a phase's own name", () => {
     expect(
-      autorouterPhaseTitles([
+      titles([
         phase("a", { phaseOrdinal: 1 }),
         phase("b", { phaseName: "fanout", phaseStageIndex: 1, phaseStageCount: 3 }),
         phase("c"),
@@ -71,7 +87,7 @@ describe("autorouterPhaseTitles", () => {
 
   it("says which group a phase routed when several were routed", () => {
     expect(
-      autorouterPhaseTitles([
+      titles([
         phase("a", {
           subcircuitId: "group_1",
           componentDisplayName: '<group#12 name=".power" />',
@@ -83,7 +99,43 @@ describe("autorouterPhaseTitles", () => {
           phaseOrdinal: 1,
         }),
       ]),
-    ).toEqual(["power: Phase 1", "board: Phase 1"]);
+    ).toEqual(["power: Phase 1", "Board: Phase 1"]);
+  });
+
+  it("tells boards without names apart, and keeps each board's phases together", () => {
+    const board = (id: string, subcircuitId: string, rest: Partial<AutorouterPhase> = {}) =>
+      phase(id, { subcircuitId, componentDisplayName: `<board#${id} />`, ...rest });
+    const scopes = autorouterReportScopes([
+      board("a", "board_0", {
+        phaseOrdinal: 1,
+        preview: {
+          bounds: { minX: -26, maxX: 26, minY: 58, maxY: 150 },
+          layerCount: 2,
+          outline: [
+            [-21, 59],
+            [21, 59],
+            [21, 149.04],
+            [-21, 149.04],
+          ],
+          pads: [],
+        },
+      }),
+      board("b", "board_1", {
+        phaseOrdinal: 1,
+        preview: { bounds: { minX: -26, maxX: 26, minY: -50, maxY: 50 }, pads: [] },
+      }),
+      board("c", "board_0", { phaseOrdinal: 2 }),
+    ]);
+    expect(
+      scopes.map((scope) => [
+        scope.label,
+        scope.detail,
+        scope.phases.map((entry) => entry.reportTitle),
+      ]),
+    ).toEqual([
+      ["Board 1", "42 × 90 mm · 2 layers", ["Board 1: Phase 1", "Board 1: Phase 2"]],
+      ["Board 2", "52 × 100 mm", ["Board 2: Phase 1"]],
+    ]);
   });
 });
 
@@ -97,12 +149,15 @@ it("summarises what a phase was asked to route", () => {
   expect(autorouterPhaseSummary(phase("a"))).toBe("");
 });
 
-it("picks the phase that failed, else the last one", () => {
+it("picks the phase that failed, else the last one, and none among several boards", () => {
   expect(defaultAutorouterPhaseId([])).toBeNull();
   expect(defaultAutorouterPhaseId([phase("a"), phase("b")])).toBe("b");
   expect(defaultAutorouterPhaseId([phase("a"), phase("b", { status: "error" }), phase("c")])).toBe(
     "b",
   );
+  const boards = [phase("a", { subcircuitId: "board_0" }), phase("b", { subcircuitId: "board_1" })];
+  expect(defaultAutorouterPhaseId(boards)).toBeNull();
+  expect(defaultAutorouterPhaseId([...boards, phase("c", { status: "error" })])).toBe("c");
 });
 
 it("titles a report after the project, the file and the phase", () => {
