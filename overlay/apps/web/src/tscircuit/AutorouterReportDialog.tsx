@@ -21,11 +21,14 @@ import { ensureLocalApi } from "~/localApi";
 
 import {
   type AutorouterPhase,
+  type AutorouterReportScope,
   autorouterPhaseSummary,
-  autorouterPhaseTitles,
+  autorouterReportScopes,
   defaultAutorouterPhaseId,
   defaultAutorouterReportTitle,
   isSimpleRouteJson,
+  type RoutedAreaPreview,
+  routedAreaExtent,
 } from "./autorouterPhases";
 import {
   createAutorouterBugReport,
@@ -90,18 +93,18 @@ function AutorouterReport(props: ReportProps) {
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- closing the dialog abandons the sign-in or upload it was waiting on, which are requests to tscircuit's API
   useEffect(() => () => requestRef.current?.abort(), []);
 
-  const titles = autorouterPhaseTitles(phases);
+  const scopes = autorouterReportScopes(phases);
+  const entries = scopes.flatMap((scope) => scope.phases);
   // A rebuild replaces the phases, and with them the one that was picked.
-  const pickedIndex = phases.findIndex((entry) => entry.id === pickedPhaseId);
-  const defaultPhaseId = defaultAutorouterPhaseId(phases);
-  const index =
-    pickedIndex === -1 ? phases.findIndex((entry) => entry.id === defaultPhaseId) : pickedIndex;
-  const phase = phases[index];
+  const picked =
+    entries.find((entry) => entry.phase.id === pickedPhaseId) ??
+    entries.find((entry) => entry.phase.id === defaultAutorouterPhaseId(phases));
+  const phase = picked?.phase;
   const title =
     editedTitle ??
-    (file === null || phase === undefined
+    (file === null || picked === undefined
       ? ""
-      : defaultAutorouterReportTitle({ cwd: props.cwd, file, phaseTitle: titles[index] ?? "" }));
+      : defaultAutorouterReportTitle({ cwd: props.cwd, file, phaseTitle: picked.reportTitle }));
 
   const submit = async () => {
     if (phase === undefined || title.trim() === "") return;
@@ -234,7 +237,7 @@ function AutorouterReport(props: ReportProps) {
           <Busy>{step.label}</Busy>
         ) : build.state === "unavailable" ? (
           <p className="text-muted-foreground text-sm">{build.reason}</p>
-        ) : phase === undefined ? (
+        ) : entries.length === 0 ? (
           building ? (
             <Busy>Building {file ?? "the circuit"} to capture what the autorouter is given</Busy>
           ) : (
@@ -245,21 +248,23 @@ function AutorouterReport(props: ReportProps) {
           )
         ) : (
           <>
-            {phases.length > 1 ? (
-              <fieldset className="flex flex-col gap-2">
-                <legend className="mb-2 font-medium text-sm">Which phase went wrong?</legend>
-                <RadioGroup value={phase.id} onValueChange={(value) => setPickedPhaseId(value)}>
-                  {phases.map((entry, entryIndex) => (
-                    <label key={entry.id} className="flex items-start gap-2">
-                      <Radio value={entry.id} />
-                      <PhaseLine phase={entry} title={titles[entryIndex] ?? ""} />
-                    </label>
-                  ))}
-                </RadioGroup>
-              </fieldset>
-            ) : (
-              <PhaseLine phase={phase} title={titles[index] ?? ""} />
-            )}
+            <fieldset className="flex flex-col gap-2">
+              {entries.length > 1 ? (
+                <legend className="mb-2 font-medium text-sm">
+                  {scopes.length > 1
+                    ? "Which board and phase went wrong?"
+                    : "Which phase went wrong?"}
+                </legend>
+              ) : null}
+              <RadioGroup
+                value={phase?.id ?? null}
+                onValueChange={(value) => setPickedPhaseId(value)}
+              >
+                {scopes.map((scope) => (
+                  <ScopeBlock key={scope.key} scope={scope} choosing={entries.length > 1} />
+                ))}
+              </RadioGroup>
+            </fieldset>
             {building ? (
               <p className="flex items-center gap-2 text-muted-foreground text-xs">
                 <Spinner className="size-3" />
@@ -313,6 +318,85 @@ function Busy(props: { readonly children: React.ReactNode }) {
       <Spinner className="size-4" />
       {props.children}
     </p>
+  );
+}
+
+/** One routed board or group: what it looks like, and the phases it was routed in. */
+function ScopeBlock(props: { readonly scope: AutorouterReportScope; readonly choosing: boolean }) {
+  const { scope } = props;
+  return (
+    <div className="flex items-start gap-3 rounded-lg border p-3">
+      {scope.preview === null ? null : <RoutedAreaThumbnail preview={scope.preview} />}
+      <div className="flex min-w-0 flex-1 flex-col gap-2">
+        <span className="flex flex-wrap items-baseline gap-x-2 text-sm">
+          <span className="font-medium">{scope.label}</span>
+          <span className="text-muted-foreground text-xs">{scope.detail}</span>
+        </span>
+        {scope.phases.map((entry) =>
+          props.choosing ? (
+            <label key={entry.phase.id} className="flex items-start gap-2">
+              <Radio value={entry.phase.id} />
+              <PhaseLine phase={entry.phase} title={entry.title} />
+            </label>
+          ) : (
+            <PhaseLine key={entry.phase.id} phase={entry.phase} title={entry.title} />
+          ),
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** The board's edge and pads, drawn small, so one board can be told from another. */
+function RoutedAreaThumbnail(props: { readonly preview: RoutedAreaPreview }) {
+  const { preview } = props;
+  const { minX, maxX, minY, maxY } = routedAreaExtent(preview);
+  const width = maxX - minX;
+  const height = maxY - minY;
+  const margin = Math.max(width, height) * 0.04;
+  // A pad smaller than this would not show at the thumbnail's size.
+  const smallest = Math.max(width, height) / 48;
+  return (
+    <svg
+      aria-hidden="true"
+      className="size-16 shrink-0 text-muted-foreground"
+      // Board coordinates have y pointing up, and SVG has it pointing down.
+      viewBox={`${minX - margin} ${-maxY - margin} ${width + margin * 2} ${height + margin * 2}`}
+    >
+      <g transform="scale(1 -1)">
+        <path
+          d={preview.pads
+            .map(([x, y, padWidth, padHeight]) => {
+              const drawnWidth = Math.max(padWidth, smallest);
+              const drawnHeight = Math.max(padHeight, smallest);
+              return `M${x - drawnWidth / 2} ${y - drawnHeight / 2}h${drawnWidth}v${drawnHeight}h${-drawnWidth}Z`;
+            })
+            .join("")}
+          fill="currentColor"
+          opacity={0.6}
+        />
+        {preview.outline === undefined ? (
+          <rect
+            x={minX}
+            y={minY}
+            width={width}
+            height={height}
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={1}
+            vectorEffect="non-scaling-stroke"
+          />
+        ) : (
+          <polygon
+            points={preview.outline.map(([x, y]) => `${x},${y}`).join(" ")}
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={1}
+            vectorEffect="non-scaling-stroke"
+          />
+        )}
+      </g>
+    </svg>
   );
 }
 

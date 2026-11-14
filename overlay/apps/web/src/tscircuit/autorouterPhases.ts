@@ -20,6 +20,24 @@ export interface AutorouterPhase {
   readonly connectionCount?: number;
   readonly obstacleCount?: number;
   readonly isReroutePhase?: boolean;
+  readonly preview?: RoutedAreaPreview;
+}
+
+/** Enough of a phase's routing problem to draw the board or group it routed. */
+export interface RoutedAreaPreview {
+  readonly bounds: Extent;
+  readonly layerCount?: number;
+  /** The board's edge as [x, y] points, when it has one. */
+  readonly outline?: ReadonlyArray<readonly [number, number]>;
+  /** Pads and other obstacles as [centerX, centerY, width, height]. */
+  readonly pads: ReadonlyArray<readonly [number, number, number, number]>;
+}
+
+interface Extent {
+  readonly minX: number;
+  readonly maxX: number;
+  readonly minY: number;
+  readonly maxY: number;
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -36,6 +54,31 @@ const withoutMissing = (phase: {
   ) as unknown as AutorouterPhase;
 
 const STATUSES = new Set(["running", "complete", "error"]);
+
+const isFiniteNumber = (value: unknown): value is number =>
+  typeof value === "number" && Number.isFinite(value);
+
+const numberTuples = <Tuple extends ReadonlyArray<number>>(value: unknown, length: number) =>
+  Array.isArray(value)
+    ? value.filter(
+        (entry): entry is Tuple =>
+          Array.isArray(entry) && entry.length === length && entry.every(isFiniteNumber),
+      )
+    : [];
+
+function readPreview(value: unknown): RoutedAreaPreview | undefined {
+  if (!isRecord(value) || !isRecord(value.bounds)) return undefined;
+  const { minX, maxX, minY, maxY } = value.bounds;
+  if (![minX, maxX, minY, maxY].every(isFiniteNumber)) return undefined;
+  const outline = numberTuples<readonly [number, number]>(value.outline, 2);
+  const layerCount = count(value.layerCount);
+  return {
+    bounds: { minX, maxX, minY, maxY } as Extent,
+    ...(layerCount === undefined ? {} : { layerCount }),
+    ...(outline.length < 3 ? {} : { outline }),
+    pads: numberTuples<readonly [number, number, number, number]>(value.pads, 4),
+  };
+}
 
 /** The frame's phase list. An entry that is not a phase is left out. */
 export function readAutorouterPhases(value: unknown): AutorouterPhase[] {
@@ -58,34 +101,98 @@ export function readAutorouterPhases(value: unknown): AutorouterPhase[] {
         connectionCount: count(entry.connectionCount),
         obstacleCount: count(entry.obstacleCount),
         isReroutePhase: entry.isReroutePhase === true ? true : undefined,
+        preview: readPreview(entry.preview),
       }),
     ];
   });
 }
 
-/** "<group#12 name=".power" />" reads as "power", and "<board#40 />" as "board". */
-function scopeName(phase: AutorouterPhase): string | null {
-  const display = phase.componentDisplayName;
-  if (display === undefined) return null;
-  const name = /name="\.?([^"]+)"/.exec(display)?.[1];
-  return name ?? /^<\s*([A-Za-z]+)/.exec(display)?.[1] ?? display;
+const plural = (amount: number, noun: string) => `${amount} ${noun}${amount === 1 ? "" : "s"}`;
+
+/** The board edge when the area has one, else the bounds the autorouter was given. */
+export function routedAreaExtent(preview: RoutedAreaPreview): Extent {
+  const { outline } = preview;
+  if (outline === undefined) return preview.bounds;
+  const xs = outline.map(([x]) => x);
+  const ys = outline.map(([, y]) => y);
+  return {
+    minX: Math.min(...xs),
+    maxX: Math.max(...xs),
+    minY: Math.min(...ys),
+    maxY: Math.max(...ys),
+  };
 }
 
-/** What to call each phase. Phases of different groups say which group they routed. */
-export function autorouterPhaseTitles(phases: ReadonlyArray<AutorouterPhase>): string[] {
-  const severalGroups = new Set(phases.map((phase) => phase.subcircuitId)).size > 1;
-  return phases.map((phase, index) => {
-    const stage =
-      phase.phaseStageIndex !== undefined && (phase.phaseStageCount ?? 0) > 1
-        ? `, stage ${phase.phaseStageIndex + 1} of ${phase.phaseStageCount}`
-        : "";
-    const title = `${phase.phaseName ?? `Phase ${phase.phaseOrdinal ?? index + 1}`}${stage}`;
-    const scope = severalGroups ? scopeName(phase) : null;
-    return scope === null ? title : `${scope}: ${title}`;
+const millimetres = (value: number) => String(Math.round(value * 10) / 10);
+
+function routedAreaDetail(preview: RoutedAreaPreview | null): string {
+  if (preview === null) return "";
+  const { minX, maxX, minY, maxY } = routedAreaExtent(preview);
+  const size = `${millimetres(maxX - minX)} × ${millimetres(maxY - minY)} mm`;
+  return preview.layerCount === undefined
+    ? size
+    : `${size} · ${plural(preview.layerCount, "layer")}`;
+}
+
+/** "<group#12 name=".power" />" reads as "power", and "<board#40 />" as "Board". */
+function scopeName(display: string | undefined): string {
+  if (display === undefined) return "Board";
+  const name = /name="\.?([^"]+)"/.exec(display)?.[1];
+  if (name !== undefined) return name;
+  const kind = /^<\s*([A-Za-z]+)/.exec(display)?.[1];
+  return kind === undefined ? display : `${kind.charAt(0).toUpperCase()}${kind.slice(1)}`;
+}
+
+/** A board or group the run routed, with the phases it was routed in. */
+export interface AutorouterReportScope {
+  readonly key: string;
+  /** Unlike every other scope's: boards without a name of their own are numbered. */
+  readonly label: string;
+  /** The routed area's size and layers, as far as the run said. */
+  readonly detail: string;
+  readonly preview: RoutedAreaPreview | null;
+  readonly phases: ReadonlyArray<{
+    readonly phase: AutorouterPhase;
+    readonly title: string;
+    /** The title with the scope's label, when the run routed several scopes. */
+    readonly reportTitle: string;
+  }>;
+}
+
+/** The run's phases under the board or group each one routed, in the order routing began. */
+export function autorouterReportScopes(
+  phases: ReadonlyArray<AutorouterPhase>,
+): AutorouterReportScope[] {
+  const byScope = new Map<string, AutorouterPhase[]>();
+  for (const phase of phases) {
+    const key = phase.subcircuitId ?? "";
+    byScope.set(key, [...(byScope.get(key) ?? []), phase]);
+  }
+  const names = [...byScope.values()].map((group) => scopeName(group[0]?.componentDisplayName));
+  const several = byScope.size > 1;
+  return [...byScope].map(([key, group], scopeIndex) => {
+    const name = names[scopeIndex] ?? "Board";
+    const sameName = names.filter((other) => other === name).length > 1;
+    const label = sameName
+      ? `${name} ${names.slice(0, scopeIndex).filter((other) => other === name).length + 1}`
+      : name;
+    const preview = group.find((phase) => phase.preview !== undefined)?.preview ?? null;
+    return {
+      key,
+      label,
+      detail: routedAreaDetail(preview),
+      preview,
+      phases: group.map((phase, index) => {
+        const stage =
+          phase.phaseStageIndex !== undefined && (phase.phaseStageCount ?? 0) > 1
+            ? `, stage ${phase.phaseStageIndex + 1} of ${phase.phaseStageCount}`
+            : "";
+        const title = `${phase.phaseName ?? `Phase ${phase.phaseOrdinal ?? index + 1}`}${stage}`;
+        return { phase, title, reportTitle: several ? `${label}: ${title}` : title };
+      }),
+    };
   });
 }
-
-const plural = (amount: number, noun: string) => `${amount} ${noun}${amount === 1 ? "" : "s"}`;
 
 /** What the phase was asked to route, as far as the run said. */
 export function autorouterPhaseSummary(phase: AutorouterPhase): string {
@@ -98,9 +205,16 @@ export function autorouterPhaseSummary(phase: AutorouterPhase): string {
     .join(" · ");
 }
 
-/** The phase a report is most likely about: the first that failed, else the last that ran. */
-export const defaultAutorouterPhaseId = (phases: ReadonlyArray<AutorouterPhase>): string | null =>
-  (phases.find((phase) => phase.status === "error") ?? phases.at(-1))?.id ?? null;
+/**
+ * The phase a report is most likely about: the first that failed, else the last that ran.
+ * Null when several boards or groups routed without a failure, as any could be the one meant.
+ */
+export function defaultAutorouterPhaseId(phases: ReadonlyArray<AutorouterPhase>): string | null {
+  const failed = phases.find((phase) => phase.status === "error");
+  if (failed !== undefined) return failed.id;
+  const severalScopes = new Set(phases.map((phase) => phase.subcircuitId)).size > 1;
+  return severalScopes ? null : (phases.at(-1)?.id ?? null);
+}
 
 /** A report title that says where the routing problem came from. */
 export function defaultAutorouterReportTitle(input: {
@@ -111,9 +225,6 @@ export function defaultAutorouterReportTitle(input: {
   const project = input.cwd?.split(/[\\/]+/).findLast((segment) => segment !== "");
   return `${project === undefined ? "" : `${project}/`}${input.file} - ${input.phaseTitle}`;
 }
-
-const isFiniteNumber = (value: unknown): value is number =>
-  typeof value === "number" && Number.isFinite(value);
 
 /**
  * Whether a value is an autorouter input. The same test `tsci report autorouter`
