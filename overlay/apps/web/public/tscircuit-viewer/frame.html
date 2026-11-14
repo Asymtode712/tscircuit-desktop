@@ -33,6 +33,8 @@
       (() => {
         const assets = self.TSCIRCUIT_VIEWER_ASSETS ?? {};
         delete self.TSCIRCUIT_VIEWER_ASSETS;
+        // Read by the script below that prices a board for the Order pane.
+        self.TSCIRCUIT_DESKTOP_JLCPCB_QUOTE_VERSION = assets.versions?.jlcpcbQuote ?? null;
 
         // RunFrame's bundle expects Node's `process` to exist.
         globalThis.process ??= { env: {}, version: "" };
@@ -224,6 +226,180 @@
             request_id: message.request_id,
             simple_route_json: phaseInputs.get(message.phase_id) ?? null,
           });
+        });
+      })();
+    </script>
+    <!--
+      Makes the files a board is ordered with, and estimates what JLCPCB
+      charges for it, for the Order pane (apps/web/src/tscircuit/OrderPanel.tsx).
+      The pane asks by message and gets text and numbers back; it does the
+      zipping, the saving and the display itself.
+
+      This runs here, in the viewer's origin, because the converters are fetched
+      from a CDN when they are first needed, as RunFrame's own export menu
+      fetches them, and code from a CDN must stay out of the app's origin.
+    -->
+    <script>
+      (() => {
+        const REQUEST_TYPE = "get_order_output";
+        const RESPONSE_TYPE = "order_output";
+
+        // The quote package ships TypeScript with no build, which jscdn cannot
+        // serve as a module. esm.sh builds it from the repository, at the
+        // version `setup` recorded (viewer.json), or the newest without one.
+        const JLCPCB_QUOTE = "@tscircuit/circuit-json-to-jlcpcb-quote";
+        const quoteVersion = self.TSCIRCUIT_DESKTOP_JLCPCB_QUOTE_VERSION;
+        const JLCPCB_QUOTE_URLS = [
+          `https://esm.sh/gh/tscircuit/circuit-json-to-jlcpcb-quote${quoteVersion ? `@v${quoteVersion}` : ""}`,
+        ];
+
+        /** For the converters RunFrame also loads: the same addresses, in the same order. */
+        const converterUrls = (name) =>
+          name === JLCPCB_QUOTE
+            ? JLCPCB_QUOTE_URLS
+            : [`https://jscdn.tscircuit.com/${name}/latest/+esm`, `https://esm.run/${name}`];
+
+        /** RunFrame keeps the converters it has loaded here under these names, so each is fetched once. */
+        const loadConverter = async (name) => {
+          const loaded = (globalThis.tscircuitDynamicModules ??= {});
+          if (Object.hasOwn(loaded, name)) return loaded[name];
+          let lastError;
+          for (const url of converterUrls(name)) {
+            try {
+              const converter = await import(url);
+              loaded[name] = converter;
+              return converter;
+            } catch (error) {
+              lastError = error;
+            }
+          }
+          throw lastError;
+        };
+
+        /**
+         * Each returns what the reply carries. Files are a map of path to text,
+         * made with the options of RunFrame's "Fabrication Files".
+         */
+        const makers = {
+          gerbers: async (circuitJson) => {
+            const { convertCircuitJsonToGerberFiles } =
+              await loadConverter("circuit-json-to-gerber");
+            // An error or a warning is an element too, and not one that can be manufactured.
+            const board = circuitJson.filter(
+              (element) => !("error_type" in element) && !("warning_type" in element),
+            );
+            return { files: convertCircuitJsonToGerberFiles(board, { flip_y_axis: false }) };
+          },
+          bom: async (circuitJson) => {
+            const { convertCircuitJsonToBomRows, convertBomRowsToCsv } =
+              await loadConverter("circuit-json-to-bom-csv");
+            const rows = await convertCircuitJsonToBomRows({ circuitJson });
+            return { files: { "bom.csv": await convertBomRowsToCsv(rows) } };
+          },
+          pick_and_place: async (circuitJson) => {
+            const { convertCircuitJsonToPickAndPlaceCsv } =
+              await loadConverter("circuit-json-to-pnp-csv");
+            const csv = await convertCircuitJsonToPickAndPlaceCsv(circuitJson, {
+              supplier: "jlcpcb",
+            });
+            return { files: { "pick_and_place.csv": csv } };
+          },
+          kicad_project: async (circuitJson, projectName) => {
+            const {
+              CircuitJsonToKicadPcbConverter,
+              CircuitJsonToKicadProConverter,
+              CircuitJsonToKicadSchConverter,
+            } = await loadConverter("circuit-json-to-kicad");
+            const output = (converter) => {
+              converter.runUntilFinished();
+              return converter.getOutputString();
+            };
+            const files = {
+              [`${projectName}.kicad_sch`]: output(new CircuitJsonToKicadSchConverter(circuitJson)),
+              [`${projectName}.kicad_pcb`]: output(
+                new CircuitJsonToKicadPcbConverter(circuitJson, { projectName }),
+              ),
+              [`${projectName}.kicad_pro`]: output(
+                new CircuitJsonToKicadProConverter(circuitJson, {
+                  projectName,
+                  schematicFilename: `${projectName}.kicad_sch`,
+                  pcbFilename: `${projectName}.kicad_pcb`,
+                }),
+              ),
+            };
+            return { files };
+          },
+          // JLCPCB's smallest order, which is the package's default: 5 boards, 2 of them assembled.
+          jlcpcb_quote: async (circuitJson) => {
+            const { convertCircuitJsonToJlcpcbQuote } = await loadConverter(JLCPCB_QUOTE);
+            const hasParts = circuitJson.some((element) => element.type === "pcb_component");
+            const quote = await convertCircuitJsonToJlcpcbQuote({
+              circuitJson,
+              assembly: hasParts ? "auto" : "none",
+              // A part JLCPCB cannot be asked for is left out and named, so the rest still gets a price.
+              unresolvedParts: "exclude",
+            });
+            return {
+              quote: {
+                order: quote.order,
+                summary: quote.summary,
+                excluded_designators: quote.excludedBomLines.flatMap(
+                  (entry) => entry.line.designators,
+                ),
+                destination_note: quote.destination?.note,
+                warnings: quote.warnings,
+              },
+            };
+          },
+        };
+
+        /**
+         * The circuit to work from: the build the app read from disk when it sends one, else
+         * the circuit RunFrame last ran, which is in the eval worker it keeps in this global.
+         */
+        const circuitJsonFor = async (request) => {
+          const circuitJson =
+            typeof request.circuit_json_text === "string"
+              ? JSON.parse(request.circuit_json_text)
+              : await globalThis.runFrameWorker?.getCircuitJson?.();
+          if (!Array.isArray(circuitJson) || circuitJson.length === 0) {
+            throw new Error("The circuit has not been rendered yet.");
+          }
+          return circuitJson;
+        };
+
+        window.addEventListener("message", (event) => {
+          if (event.source !== window.parent) return;
+          const request = event.data;
+          if (
+            request === null ||
+            typeof request !== "object" ||
+            request.tscircuit_desktop_type !== REQUEST_TYPE
+          ) {
+            return;
+          }
+          const reply = (result) => {
+            window.parent.postMessage(
+              { tscircuit_desktop_type: RESPONSE_TYPE, request_id: request.request_id, ...result },
+              // A page without an origin cannot be addressed by one.
+              event.origin === "null" ? "*" : event.origin,
+            );
+          };
+          const make = Object.hasOwn(makers, request.kind) ? makers[request.kind] : null;
+          if (make === null) {
+            reply({ ok: false, error_message: `Unknown request: ${String(request.kind)}` });
+            return;
+          }
+          circuitJsonFor(request)
+            .then((circuitJson) => make(circuitJson, String(request.project_name ?? "circuit")))
+            .then(
+              (made) => reply({ ok: true, ...made }),
+              (error) =>
+                reply({
+                  ok: false,
+                  error_message: error instanceof Error ? error.message : String(error),
+                }),
+            );
         });
       })();
     </script>

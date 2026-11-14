@@ -1,4 +1,4 @@
-import type { EnvironmentId } from "@t3tools/contracts";
+import type { EnvironmentId, ScopedThreadRef } from "@t3tools/contracts";
 import { expect, it, vi } from "vite-plus/test";
 import { act, render } from "../../test/render";
 import type { ComposerThreadTarget } from "~/composerDraftStore";
@@ -21,6 +21,12 @@ vi.mock(import("./AutorouterReportDialog"), () => ({
   AutorouterReportDialog: (props) => (
     <output data-testid="routing-report">{props.phases.map((phase) => phase.id).join(",")}</output>
   ),
+}));
+
+const { openOrderPane } = vi.hoisted(() => ({ openOrderPane: vi.fn() }));
+vi.mock(import("./orderActions"), async (importOriginal) => ({
+  ...(await importOriginal()),
+  openOrderPane,
 }));
 
 import CircuitPanel from "./CircuitPanel";
@@ -52,6 +58,7 @@ it("stacks at most two panes, isolates navigation/errors, and closes with focus 
     visible: true,
     workspaceMutationId: null,
     composerDraftTarget: {} as ComposerThreadTarget,
+    threadRef: { environmentId: "test", threadId: "thread" } as ScopedThreadRef,
   };
   // This isolated circuit panel has no route-dependent behavior.
   await using screen = await render(<CircuitPanel {...props} />, { router: false });
@@ -72,6 +79,8 @@ it("stacks at most two panes, isolates navigation/errors, and closes with focus 
   expect(panel.classList.contains("divide-y")).toBe(true);
   expect(panel.children[0]?.getAttribute("aria-label")).toBe("Primary circuit view");
   expect(panel.children[1]?.getAttribute("aria-label")).toBe("Secondary circuit view");
+  await screen.getByRole("button", { name: "Order", exact: true }).nth(1).click();
+  expect(openOrderPane).toHaveBeenCalledWith(props.threadRef);
   const bottomFrame = document.querySelectorAll("iframe")[1]!;
   await act(() => ready(bottomFrame));
   await act(() => rendered(bottomFrame));

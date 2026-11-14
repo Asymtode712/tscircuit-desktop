@@ -18,7 +18,7 @@
 import { createHash } from "node:crypto"
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs"
 import { dirname, join } from "node:path"
-import { fail, run, step } from "./exec.ts"
+import { fail, run, step, tryRun } from "./exec.ts"
 import { checkoutDir, repoRoot } from "./paths.ts"
 
 /** The contents of viewer.json. */
@@ -29,8 +29,15 @@ export interface ViewerSource {
   tscircuit: string
   /** Version of the manifold-3d npm package. It has to be the one RunFrame's 3D viewer asks for. */
   manifold: string
+  /**
+   * Version or tag of @tscircuit/circuit-json-to-jlcpcb-quote, which prices a board in the Order pane.
+   * The viewer fetches it when a price is asked for; the build only settles which version.
+   */
+  jlcpcbQuote?: string
   /** Base URL of the npm registry, for a mirror. Defaults to registry.npmjs.org. */
   registry?: string
+  /** Base URL of tscircuit's package CDN, for a mirror. Defaults to jscdn.tscircuit.com. */
+  jscdn?: string
 }
 
 interface Sources {
@@ -40,6 +47,8 @@ interface Sources {
 }
 
 const DEFAULT_REGISTRY = "https://registry.npmjs.org"
+const DEFAULT_JSCDN = "https://jscdn.tscircuit.com"
+const JLCPCB_QUOTE_PACKAGE = "@tscircuit/circuit-json-to-jlcpcb-quote"
 
 export const viewerFile = join(repoRoot, "viewer.json")
 
@@ -96,6 +105,26 @@ function fetchPackage(name: string, versionOrTag: string, options: Sources): Pac
   }
 }
 
+/**
+ * The version a tag such as "latest" names today. The package is not on npm, so tscircuit's CDN is asked.
+ * Null when it cannot be found: the viewer then asks for the newest, and a price is the only thing at stake.
+ */
+function resolveJlcpcbQuoteVersion(versionOrTag: string, jscdn: string, scratchDir: string): string | null {
+  mkdirSync(scratchDir, { recursive: true })
+  const manifestFile = join(scratchDir, "jlcpcb-quote-package.json")
+  const url = `${jscdn}/${JLCPCB_QUOTE_PACKAGE}/${versionOrTag}/package.json`
+  const fetched = tryRun("curl", ["--fail", "--silent", "--show-error", "--location", "--output", manifestFile, url])
+  try {
+    if (!fetched.ok) return null
+    const version = (JSON.parse(readFileSync(manifestFile, "utf8")) as { version?: unknown }).version
+    return typeof version === "string" && /^\d+\.\d+\.\d+[\w.-]*$/.test(version) ? version : null
+  } catch {
+    return null
+  } finally {
+    rmSync(manifestFile, { force: true })
+  }
+}
+
 /** Keeps a generated file out of `git add --all`, which `export` relies on. */
 function excludeFromCheckoutGit(path: string): void {
   const excludeFile = join(checkoutDir, ".git", "info", "exclude")
@@ -127,7 +156,7 @@ export function bundleViewer(source: ViewerSource): void {
     )
   }
 
-  // An autorouter bug report reads the routing problems of a run off the eval worker RunFrame keeps here.
+  // An autorouter bug report reads a run's routing problems off the eval worker RunFrame keeps here, and the Order pane reads the circuit off it.
   if (!runframe.includes("runFrameWorker")) {
     fail(
       `tscircuit ${tscircuit.version} cannot be used as the circuit viewer: its RunFrame no longer keeps its eval worker in globalThis.runFrameWorker, which the viewer's page listens on to report autorouter bugs. Change overlay/apps/web/public/tscircuit-viewer/frame.html to follow it.`,
@@ -137,12 +166,19 @@ export function bundleViewer(source: ViewerSource): void {
   const tscircuitManifest = JSON.parse(tscircuit.read("package.json").toString("utf8")) as {
     dependencies?: Record<string, string>
   }
+  const jlcpcbQuote = source.jlcpcbQuote
+    ? resolveJlcpcbQuoteVersion(source.jlcpcbQuote, (source.jscdn ?? DEFAULT_JSCDN).replace(/\/+$/, ""), resolved.cacheDir)
+    : null
+  if (source.jlcpcbQuote && jlcpcbQuote === null) {
+    step(`Could not look up ${JLCPCB_QUOTE_PACKAGE} ${source.jlcpcbQuote}; the Order pane will ask for the newest version when it prices a board`)
+  }
   const assets = {
     versions: {
       tscircuit: tscircuit.version,
       // RunFrame's worker is built from this dependency. The frame names it so RunFrame need not ask a CDN which is newest.
       eval: (tscircuitManifest.dependencies?.["@tscircuit/eval"] ?? "").replace(/^[^0-9]+/, "") || null,
       manifold: manifold.version,
+      jlcpcbQuote,
     },
     manifoldJs: manifold.read("manifold.js").toString("utf8"),
     manifoldWasmBase64: manifold.read("manifold.wasm").toString("base64"),
@@ -151,5 +187,8 @@ export function bundleViewer(source: ViewerSource): void {
   mkdirSync(target, { recursive: true })
   writeFileSync(join(target, "runframe.min.js"), runframe)
   writeFileSync(join(target, "viewer-assets.js"), `self.TSCIRCUIT_VIEWER_ASSETS = ${JSON.stringify(assets)};\n`)
-  step(`Bundled the circuit viewer: tscircuit ${tscircuit.version}, manifold-3d ${manifold.version}`)
+  step(
+    `Bundled the circuit viewer: tscircuit ${tscircuit.version}, manifold-3d ${manifold.version}` +
+      (jlcpcbQuote ? `, prices from ${JLCPCB_QUOTE_PACKAGE} ${jlcpcbQuote}` : ""),
+  )
 }

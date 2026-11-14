@@ -21,6 +21,12 @@ export const circuitTabTitle = (surface: CircuitSurface): string =>
         Math.max(surface.relativePath.lastIndexOf("/"), surface.relativePath.lastIndexOf("\\")) + 1,
       );
 
+/** The file of the panel's Circuit tab: undefined when it shows the entry file, null with no such tab. */
+export function circuitTabFile(panel: ThreadRightPanelState): string | undefined | null {
+  const tab = panel.surfaces.find((surface) => surface.kind === "circuit");
+  return tab === undefined ? null : tab.relativePath;
+}
+
 const isCircuitSourcePath = (path: string): boolean => /\.tsx$/i.test(path);
 
 /**
