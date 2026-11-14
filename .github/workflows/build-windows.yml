@@ -46,6 +46,25 @@ jobs:
         with:
           toolchain: stable
           targets: x86_64-pc-windows-msvc
+      - name: Test embedded signature verification
+        if: '!inputs.sign'
+        run: |
+          $verify = './.t3code/scripts/tscircuit-windows/verify-signature.ps1'
+          $binary = (Get-Process -Id $PID).Path
+          & $verify -Path $binary -ExpectedPublisher 'Microsoft Corporation'
+
+          # Reproduce PowerShell reporting a catalog signature for an embedded-signed file.
+          function Get-AuthenticodeSignature([string]$LiteralPath) {
+            [pscustomobject]@{ Status = 'Valid'; SignatureType = 'Catalog' }
+          }
+          & $verify -Path $binary -ExpectedPublisher 'Microsoft Corporation'
+          try {
+            & $verify -Path $binary -ExpectedPublisher 'tscircuit Inc'
+          } catch {
+            if ($_.Exception.Message -notlike 'Unexpected signing publisher*') { throw }
+            return
+          }
+          throw 'The verifier accepted the wrong embedded signer.'
       - name: Install the Microsoft signing module
         if: inputs.sign
         run: ./.t3code/scripts/tscircuit-windows/install-signing.ps1
