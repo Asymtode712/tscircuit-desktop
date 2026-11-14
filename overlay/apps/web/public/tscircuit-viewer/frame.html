@@ -60,6 +60,12 @@
           }
         }
 
+        // The 3D view rotates the board by itself until told otherwise, and keeps that
+        // choice here. Start it still, unless the user switched rotation on in its menu.
+        if (localStorage.getItem("cadViewerAutoRotateUserToggled") !== "true") {
+          localStorage.setItem("cadViewerAutoRotate", "false");
+        }
+
         // Take props from the app, as runframe.tscircuit.com/iframe.html does.
         window.TSCIRCUIT_USE_RUNFRAME_PROPS_FROM_PARENT = true;
         // The eval worker is the one inside RunFrame's bundle, so there is no version to choose or look up.

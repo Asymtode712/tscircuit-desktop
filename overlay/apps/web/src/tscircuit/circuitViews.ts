@@ -4,20 +4,21 @@
  */
 
 /** A view the viewer draws from the circuit. */
-export type RenderedViewId = "pcb" | "schematic" | "cad" | "system" | "assembly";
+export type RenderedViewId = "pcb" | "schematic" | "cad" | "system" | "bom" | "drawing";
 /** A view with a tab of its own. Source is the file's text, drawn by the app. */
 export type CircuitViewId = "source" | RenderedViewId;
 /** What can be on screen: a view, or the viewer's list of errors. */
 export type CircuitScreen = CircuitViewId | "errors";
 
-export const CIRCUIT_VIEWS: ReadonlyArray<{ readonly id: CircuitViewId; readonly label: string }> =
+const CIRCUIT_VIEWS: ReadonlyArray<{ readonly id: CircuitViewId; readonly label: string }> =
   [
     { id: "source", label: "Source" },
     { id: "pcb", label: "PCB" },
     { id: "schematic", label: "Schematic" },
     { id: "cad", label: "3D" },
     { id: "system", label: "System" },
-    { id: "assembly", label: "Assembly" },
+    { id: "bom", label: "BOM" },
+    { id: "drawing", label: "Drawings" },
   ];
 
 const RENDERED_VIEWS: ReadonlyArray<RenderedViewId> = [
@@ -25,10 +26,28 @@ const RENDERED_VIEWS: ReadonlyArray<RenderedViewId> = [
   "schematic",
   "cad",
   "system",
-  "assembly",
+  "bom",
+  "drawing",
 ];
 
-export const DEFAULT_CIRCUIT_VIEW: CircuitViewId = "pcb";
+/** Few designs have drawings, so this view has a tab only in one that does. */
+const TAB_ONLY_WITH_CONTENT: RenderedViewId = "drawing";
+/** A view with a tab in every file: muted, with help on how to fill it, while it is empty. */
+export type StandingViewId = Exclude<RenderedViewId, "drawing">;
+
+export const hasStandingTab = (view: RenderedViewId): view is StandingViewId =>
+  view !== TAB_ONLY_WITH_CONTENT;
+
+const DEFAULT_CIRCUIT_VIEW: CircuitViewId = "pcb";
+
+/** The view the next file opens on. Not one that most files have no tab for. */
+export const canBePreferred = (screen: CircuitScreen): screen is CircuitViewId =>
+  screen !== "errors" && screen !== TAB_ONLY_WITH_CONTENT;
+
+/** The view a saved choice names. An older version may have saved one that is gone. */
+export const preferredViewFrom = (saved: string | null): CircuitViewId =>
+  CIRCUIT_VIEWS.find((view) => view.id === saved && canBePreferred(view.id))?.id ??
+  DEFAULT_CIRCUIT_VIEW;
 
 const isRenderedView = (screen: CircuitScreen): screen is RenderedViewId =>
   (RENDERED_VIEWS as ReadonlyArray<string>).includes(screen);
@@ -38,26 +57,31 @@ export type ElementCounts = Readonly<Record<string, number>>;
 
 const has = (counts: ElementCounts, type: string) => (counts[type] ?? 0) > 0;
 
-/** A group or a sheet is a container: a circuit with no parts still has one, and an empty schematic. */
-const SCHEMATIC_CONTAINERS = new Set(["schematic_group", "schematic_sheet"]);
+/** Containers: a file with no parts still has them, and nothing to draw in them. */
+const CONTAINERS = new Set(["pcb_group", "schematic_group", "schematic_sheet"]);
 
-const hasSchematicContent = (counts: ElementCounts) =>
+const hasContent = (counts: ElementCounts, prefix: "pcb_" | "schematic_" | "drawing_") =>
   Object.entries(counts).some(
     ([type, count]) =>
       count > 0 &&
-      type.startsWith("schematic_") &&
+      type.startsWith(prefix) &&
       !type.includes("error") &&
-      !SCHEMATIC_CONTAINERS.has(type),
+      !type.includes("warning") &&
+      !CONTAINERS.has(type),
   );
 
 /** The rendered views a circuit has something to show in. */
 export function viewsWithContent(counts: ElementCounts): ReadonlySet<RenderedViewId> {
   const views = new Set<RenderedViewId>();
   const board = has(counts, "pcb_board") || has(counts, "pcb_panel");
-  if (board) views.add("pcb").add("cad");
-  if (board && has(counts, "pcb_component")) views.add("assembly");
+  // Parts draw without a board around them: a file that is one module has none.
+  if (hasContent(counts, "pcb_")) views.add("pcb");
+  if (board) views.add("cad");
+  // The bill of materials has a row for each part that is placed.
+  if (has(counts, "pcb_component")) views.add("bom");
+  if (hasContent(counts, "drawing_")) views.add("drawing");
   // The viewer cannot draw one schematic for a panel of boards.
-  if (hasSchematicContent(counts) && !has(counts, "pcb_panel")) views.add("schematic");
+  if (hasContent(counts, "schematic_") && !has(counts, "pcb_panel")) views.add("schematic");
   if (has(counts, "system_block_page")) views.add("system");
   return views;
 }
@@ -115,10 +139,12 @@ function withErrorCleared(state: CircuitViewState): CircuitViewState {
 
 /**
  * Until the user picks a view for this file, a view with nothing in it gives
- * way to the first one that has something, or to the source.
+ * way to the first one that has something, or to the source. A view whose tab
+ * is gone gives way even if the user picked it.
  */
 function withViewPicked(state: CircuitViewState): CircuitViewState {
-  if (state.userPicked || state.counts === null || !isRenderedView(state.screen)) return state;
+  if (state.counts === null || !isRenderedView(state.screen)) return state;
+  if (state.userPicked && state.screen !== TAB_ONLY_WITH_CONTENT) return state;
   const available = viewsWithContent(state.counts);
   if (available.has(state.screen)) return state;
   return { ...state, screen: RENDERED_VIEWS.find((view) => available.has(view)) ?? "source" };
@@ -130,8 +156,8 @@ function circuitViewReducer(state: CircuitViewState, action: CircuitViewAction):
       return { ...state, screen: action.screen, returnTo: null, userPicked: true };
     case "tab_requested": {
       // Only from one drawn view to another. The app decides about errors and the source itself.
-      const requested = RENDERED_VIEWS.find((view) => view === action.tab);
-      return requested !== undefined && isRenderedView(state.screen)
+      const requested = viewTabs(state).find((view) => view.id === action.tab)?.id;
+      return requested !== undefined && requested !== "source" && isRenderedView(state.screen)
         ? { ...state, screen: requested, returnTo: null, userPicked: true }
         : state;
     }
@@ -185,7 +211,9 @@ export function circuitPanelReducer(
   action: CircuitViewAction & { readonly file: string },
 ): CircuitPanelState {
   const preferred =
-    action.type === "user_picked" && action.screen !== "errors" ? action.screen : state.preferred;
+    action.type === "user_picked" && canBePreferred(action.screen)
+      ? action.screen
+      : state.preferred;
   return {
     file: action.file,
     view: circuitViewReducer(viewStateForFile(state, action.file), action),
@@ -200,6 +228,13 @@ export function circuitPanelReducer(
 export function unmutedViews(state: CircuitViewState): ReadonlySet<RenderedViewId> {
   if (state.executionError !== null) return new Set();
   return state.counts === null ? new Set(RENDERED_VIEWS) : viewsWithContent(state.counts);
+}
+
+/** The views with a tab in the header, in order. */
+export function viewTabs(state: CircuitViewState): typeof CIRCUIT_VIEWS {
+  const shown =
+    state.counts !== null && viewsWithContent(state.counts).has(TAB_ONLY_WITH_CONTENT);
+  return shown ? CIRCUIT_VIEWS : CIRCUIT_VIEWS.filter((view) => view.id !== TAB_ONLY_WITH_CONTENT);
 }
 
 export interface ViewHelp {
@@ -219,13 +254,13 @@ const BOARD_EXAMPLE = `export default () => (
   </board>
 )`;
 
-export const VIEW_HELP: Readonly<Record<RenderedViewId, ViewHelp>> = {
+export const VIEW_HELP: Readonly<Record<StandingViewId, ViewHelp>> = {
   pcb: {
-    title: "This file has no board",
+    title: "This file has nothing to place on a PCB",
     description:
-      "The PCB view draws a <board> and the footprints of the parts on it. Wrap your parts in a board and give each one a footprint.",
+      "The PCB view draws the footprints of the parts in the file, and the <board> around them if there is one. Add parts and give each one a footprint.",
     example: BOARD_EXAMPLE,
-    prompt: "Add a TSX <board> with parts and footprints to populate the PCB view",
+    prompt: "Add TSX parts with footprints to populate the PCB view",
   },
   schematic: {
     title: "This file has no schematic",
@@ -256,12 +291,12 @@ export default () => (
 )`,
     prompt: "Add TSX systemblock elements to populate the System view",
   },
-  assembly: {
-    title: "This file has nothing to assemble",
+  bom: {
+    title: "This file has no parts to list",
     description:
-      "The Assembly view shows where each part goes on the board. It needs a <board> with at least one part that has a footprint.",
+      "The BOM view lists the parts to buy: one row for each part that is placed, with its value and footprint. Add parts and give each one a footprint.",
     example: BOARD_EXAMPLE,
-    prompt: "Add a TSX <board> with parts and footprints to populate the Assembly view",
+    prompt: "Add TSX parts with footprints to populate the BOM view",
   },
 };
 
