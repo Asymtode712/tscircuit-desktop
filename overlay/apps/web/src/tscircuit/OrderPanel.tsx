@@ -161,7 +161,7 @@ export default function OrderPanel(props: {
   }
   return (
     <OrderPage
-      key={viewerAttempt}
+      key={`${viewerAttempt}:${entryFile}`}
       fsMap={project.fsMap}
       entryFile={entryFile}
       lookingForBuild={built.status === "checking"}

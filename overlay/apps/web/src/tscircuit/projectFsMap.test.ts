@@ -5,8 +5,33 @@ import {
   isProjectSourceFile,
   pickEntryFile,
   pickFileToOrder,
+  readProject,
+  selectedCircuitFile,
   shouldWalkDirectory,
 } from "./projectFsMap";
+
+describe("readProject", () => {
+  it("rejects a failed directory listing", async () => {
+    await expect(
+      readProject({
+        list: async () => null,
+        read: async () => null,
+      }),
+    ).rejects.toThrow("Could not list project files");
+  });
+
+  it("rejects a failed source file read", async () => {
+    await expect(
+      readProject({
+        list: async () => ({
+          entries: [{ path: "index.tsx", kind: "file" }],
+          truncated: false,
+        }),
+        read: async () => null,
+      }),
+    ).rejects.toThrow("Could not read project file: index.tsx");
+  });
+});
 
 describe("pickEntryFile", () => {
   it("prefers the entrypoint named in tscircuit.config.json", () => {
@@ -34,6 +59,19 @@ describe("pickEntryFile", () => {
 
   it("returns null when the project has no .tsx file", () => {
     expect(pickEntryFile({ "package.json": "{}", "lib/math.ts": "" })).toBeNull();
+  });
+});
+
+describe("selectedCircuitFile", () => {
+  const files = { "index.tsx": "", "boards/led.tsx": "" };
+
+  it("uses the entry file only when none was requested", () => {
+    expect(selectedCircuitFile(files, null)).toBe("index.tsx");
+    expect(selectedCircuitFile(files, "boards/led.tsx")).toBe("boards/led.tsx");
+  });
+
+  it("does not substitute the entry file for an unavailable file", () => {
+    expect(selectedCircuitFile(files, "boards/deleted.tsx")).toBeNull();
   });
 });
 
