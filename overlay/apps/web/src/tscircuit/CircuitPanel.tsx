@@ -638,7 +638,7 @@ function CircuitViewer(props: {
   readonly rebuilds: number;
   readonly dispatch: Dispatch<PanelAction>;
   /** The phases of the run in the viewer. Null once it is sent files it has not run yet. */
-  readonly onPhases?: (phases: FilePhases | null) => void;
+  readonly onPhases: ((phases: FilePhases | null) => void) | undefined;
   readonly onStartFailed: (failed: boolean) => void;
   readonly onRetry: () => void;
   readonly frameRef: RefObject<HTMLIFrameElement | null>;
