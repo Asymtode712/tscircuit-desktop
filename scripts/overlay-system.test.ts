@@ -7,7 +7,7 @@ import { spawnSync } from "node:child_process"
 import { createHash } from "node:crypto"
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
 import { test } from "node:test"
 import { NOTE_PLACEHOLDER } from "./lib/patch-files.ts"
 
@@ -370,10 +370,22 @@ test("the viewer named in viewer.json is bundled from npm packages, and never ex
     "manifold.js": "export default () => ({})",
     "manifold.wasm": Buffer.from([0, 97, 115, 109]),
   })
+  // The quote package is not bundled: only the version "latest" names is recorded, from tscircuit's CDN.
+  const jscdn = join(repo, "..", "jscdn")
+  const quoteManifest = join(jscdn, "@tscircuit/circuit-json-to-jlcpcb-quote", "latest", "package.json")
+  mkdirSync(dirname(quoteManifest), { recursive: true })
+  writeFileSync(quoteManifest, JSON.stringify({ version: "0.0.9" }))
   const configure = (tscircuit: string) =>
     writeFileSync(
       join(repo, "viewer.json"),
-      JSON.stringify({ into: "public/viewer", registry: `file://${registry}`, tscircuit, manifold: "3.5.1" }),
+      JSON.stringify({
+        into: "public/viewer",
+        registry: `file://${registry}`,
+        jscdn: `file://${jscdn}`,
+        tscircuit,
+        manifold: "3.5.1",
+        jlcpcbQuote: "latest",
+      }),
     )
   const assets = () => {
     const source = readFileSync(join(checkout, "public/viewer/viewer-assets.js"), "utf8")
@@ -389,7 +401,13 @@ test("the viewer named in viewer.json is bundled from npm packages, and never ex
   assert.match(readFileSync(join(checkout, "public/viewer/runframe.min.js"), "utf8"), /RunFrame and its worker/)
   assert.equal(assets().manifoldJs, "export default () => ({})")
   assert.deepEqual([...Buffer.from(assets().manifoldWasmBase64, "base64")], [0, 97, 115, 109])
-  assert.deepEqual(assets().versions, { tscircuit: "1.2.3", eval: "0.0.7", manifold: "3.5.1" })
+  assert.deepEqual(assets().versions, { tscircuit: "1.2.3", eval: "0.0.7", manifold: "3.5.1", jlcpcbQuote: "0.0.9" })
+
+  // A price is not worth a failed build: without the lookup the viewer asks for the newest version itself.
+  rmSync(quoteManifest)
+  const withoutLookup = script("setup", "--no-install")
+  assert.equal(withoutLookup.status, 0, withoutLookup.stderr)
+  assert.equal(assets().versions.jlcpcbQuote, null)
 
   // Generated, so it is neither saved to overlay/ nor treated as unsaved work. The page around it is ours.
   writeFileSync(join(checkout, "public/viewer/frame.html"), "<div id=root></div>")

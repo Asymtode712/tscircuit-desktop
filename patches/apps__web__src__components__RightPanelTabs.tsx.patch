@@ -1,7 +1,7 @@
-Lists Circuit in the empty-panel launcher and the "+" menu, and gives the tab its title and icon. The pieces come from apps/web/src/tscircuit/.
+Lists Circuit and Order in the empty-panel launcher and the "+" menu, and gives each tab its title and icon. The pieces come from apps/web/src/tscircuit/.
 
 diff --git a/apps/web/src/components/RightPanelTabs.tsx b/apps/web/src/components/RightPanelTabs.tsx
-index b08f5031903c86d04be86f84e1a7d7d20beacd5d..9ff2af5bfa6e857a05f9777301ef6f2a98bdc3b1 100644
+index b08f5031903c86d04be86f84e1a7d7d20beacd5d..5e8f7c63aeed957941fdaa1c8235d1dde1047f9e 100644
 --- a/apps/web/src/components/RightPanelTabs.tsx
 +++ b/apps/web/src/components/RightPanelTabs.tsx
 @@ -106,6 +106,8 @@ import { resolvePullRequestState } from "./pullRequest/pullRequestPresentation";
@@ -9,7 +9,7 @@ index b08f5031903c86d04be86f84e1a7d7d20beacd5d..9ff2af5bfa6e857a05f9777301ef6f2a
  import { observeResize } from "~/lib/observeResize";
  import { surfaceShortcutKey } from "~/lib/surfaceShortcutKey";
 +import { circuitTabTitle } from "~/tscircuit/circuitSurface";
-+import { CircuitTabIcon, circuitSurfaceActions } from "~/tscircuit/circuitTab";
++import { CircuitTabIcon, OrderTabIcon, tscircuitSurfaceActions } from "~/tscircuit/surfaceTabs";
  
  export interface RightPanelTabsProps {
    mode: PreviewPanelMode;
@@ -18,7 +18,7 @@ index b08f5031903c86d04be86f84e1a7d7d20beacd5d..9ff2af5bfa6e857a05f9777301ef6f2a
    onAddDiff: () => void;
    onAddFiles: () => void;
 +  /** tscircuit desktop: absent where there is no thread to open a circuit for. */
-+  onAddCircuit?: (() => void) | undefined;
++  onAddTscircuitTab?: ((kind: "circuit" | "order") => void) | undefined;
    onAddPullRequest: () => void;
    onAddPullRequests: () => void;
    onAddDevice: () => void;
@@ -27,7 +27,7 @@ index b08f5031903c86d04be86f84e1a7d7d20beacd5d..9ff2af5bfa6e857a05f9777301ef6f2a
    onAddDiff: () => void;
    onAddFiles: () => void;
 +  /** tscircuit desktop: absent where there is no thread to open a circuit for. */
-+  onAddCircuit?: (() => void) | undefined;
++  onAddTscircuitTab?: ((kind: "circuit" | "order") => void) | undefined;
    onAddPullRequest: () => void;
    onAddPullRequests: () => void;
    onAddDevice: () => void;
@@ -35,41 +35,45 @@ index b08f5031903c86d04be86f84e1a7d7d20beacd5d..9ff2af5bfa6e857a05f9777301ef6f2a
        disabledReason: SURFACE_UNAVAILABLE_HINTS.files,
        onClick: props.onAddFiles,
      },
-+    ...circuitSurfaceActions(props.onAddCircuit),
++    ...tscircuitSurfaceActions(props.onAddTscircuitTab),
      {
        label: "Diff",
        icon: FileDiff,
-@@ -596,6 +603,8 @@ function surfaceTitle(
+@@ -596,6 +603,10 @@ function surfaceTitle(
        return surface.title ?? surface.target?.name ?? "Device";
      case "side-chat":
        return "Side chat";
 +    case "circuit":
 +      return circuitTabTitle(surface);
++    case "order":
++      return "Order";
      case "preview": {
        const snapshot = surface.resourceId ? sessions[surface.resourceId] : null;
        if (!snapshot || snapshot.navStatus._tag === "Idle") return "Browser";
-@@ -686,6 +695,8 @@ function SurfaceIcon({
+@@ -686,6 +697,10 @@ function SurfaceIcon({
        return <PullRequestGlyph.link className="size-3 shrink-0" />;
      case "side-chat":
        return <SideChatTabIcon environmentId={environmentId} threadId={surface.threadId} />;
 +    case "circuit":
 +      return <CircuitTabIcon />;
++    case "order":
++      return <OrderTabIcon />;
      case "device":
        return surface.target?.platform === "ios" ? (
          <AppleIcon className="size-3 shrink-0" />
-@@ -1122,6 +1133,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
+@@ -1122,6 +1137,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
        disabledReason: SURFACE_DISABLED_REASONS.files,
        onClick: props.onAddFiles,
      },
-+    ...circuitSurfaceActions(props.onAddCircuit),
++    ...tscircuitSurfaceActions(props.onAddTscircuitTab),
      {
        label: "Diff",
        icon: FileDiff,
-@@ -1545,6 +1557,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
+@@ -1545,6 +1561,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
              onAddTerminal={props.onAddTerminal}
              onAddDiff={props.onAddDiff}
              onAddFiles={props.onAddFiles}
-+            onAddCircuit={props.onAddCircuit}
++            onAddTscircuitTab={props.onAddTscircuitTab}
              onAddPullRequest={props.onAddPullRequest}
              onAddPullRequests={props.onAddPullRequests}
              onAddDevice={props.onAddDevice}

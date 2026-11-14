@@ -53,11 +53,44 @@ export function pickEntryFile(fsMap: ProjectFsMap): string | null {
   for (const name of ENTRY_FILE_NAMES) {
     if (name in fsMap) return name;
   }
+  const circuits = tsxFiles(fsMap);
+  return circuits.find((path) => /\.circuit\.tsx$/i.test(path)) ?? circuits[0] ?? null;
+}
+
+/** Shallowest first, then by name. */
+function tsxFiles(fsMap: ProjectFsMap): string[] {
   const depth = (path: string) => path.split("/").length;
-  const circuits = Object.keys(fsMap)
+  return Object.keys(fsMap)
     .filter((path) => /\.tsx$/i.test(path))
     .toSorted((a, b) => depth(a) - depth(b) || a.localeCompare(b));
-  return circuits.find((path) => /\.circuit\.tsx$/i.test(path)) ?? circuits[0] ?? null;
+}
+
+/** The files that may hold a circuit, the project's entry file first. */
+export function circuitFileCandidates(fsMap: ProjectFsMap): string[] {
+  const entry = pickEntryFile(fsMap);
+  const others = tsxFiles(fsMap).filter((path) => path !== entry);
+  return entry === null ? others : [entry, ...others];
+}
+
+/**
+ * The file the Order tab orders: the one chosen there, else the Circuit tab's,
+ * else the project's only circuit. Null when it has to ask.
+ */
+export function pickFileToOrder(input: {
+  readonly fsMap: ProjectFsMap;
+  readonly chosen: string | null;
+  /** Undefined when the Circuit tab shows the entry file, null with no Circuit tab. */
+  readonly circuitTabFile: string | undefined | null;
+}): string | null {
+  const { fsMap, chosen, circuitTabFile } = input;
+  if (chosen !== null && chosen in fsMap) return chosen;
+  if (circuitTabFile !== null) {
+    return circuitTabFile !== undefined && circuitTabFile in fsMap
+      ? circuitTabFile
+      : pickEntryFile(fsMap);
+  }
+  const candidates = circuitFileCandidates(fsMap);
+  return candidates.length === 1 ? (candidates[0] ?? null) : null;
 }
 
 function readConfiguredEntrypoint(config: string | undefined): string | null {
