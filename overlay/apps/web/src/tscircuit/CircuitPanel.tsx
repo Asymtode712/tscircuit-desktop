@@ -273,9 +273,9 @@ export default function CircuitPanel(props: {
         )}
         persistPreference
         label="Primary circuit view"
+        splitButtonRef={splitButton}
         splitControl={{
           kind: "split",
-          buttonRef: splitButton,
           disabled: secondaryView !== null,
           onSplit: setSecondaryView,
         }}
@@ -308,16 +308,16 @@ function CircuitPane(props: {
   readonly initialView: CircuitViewId;
   readonly persistPreference: boolean;
   readonly label: string;
+  readonly splitButtonRef?: React.RefObject<HTMLButtonElement | null>;
   readonly splitControl:
     | {
         readonly kind: "split";
-        readonly buttonRef: React.RefObject<HTMLButtonElement | null>;
         readonly disabled: boolean;
         readonly onSplit: (view: CircuitViewId) => void;
       }
     | { readonly kind: "close"; readonly onClose: () => void };
 }) {
-  const { project, entryFile, viewerFiles, cwd, splitControl } = props;
+  const { project, entryFile, viewerFiles, cwd, splitControl, splitButtonRef } = props;
   const [viewerAttempt, setViewerAttempt] = useState(0);
   const [panelState, dispatch] = useReducer(
     circuitPanelReducer,
@@ -384,7 +384,7 @@ function CircuitPane(props: {
         actions={
           splitControl.kind === "split" ? (
             <Button
-              ref={splitControl.buttonRef}
+              ref={splitButtonRef}
               size="sm"
               variant="outline"
               disabled={splitControl.disabled}
