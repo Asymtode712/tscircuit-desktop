@@ -55,6 +55,10 @@ Download the newest `.dmg` from [Releases](https://github.com/tscircuit/tscircui
 
 The builds are signed with tscircuit's Apple Developer ID and notarized by Apple.
 
+### Install it on Windows
+
+Download and run the Windows x64 `.exe` installer from [Releases](https://github.com/tscircuit/tscircuit-desktop/releases). The installer, app, and uninstaller are signed by tscircuit Inc.
+
 ## Change the app
 
 ```sh
@@ -127,7 +131,9 @@ When the app starts it copies the skill to `~/.agents/skills/tscircuit` (read by
 
 Every push to `main` builds the app and publishes a GitHub release, `v<major>.<minor>.<run>`. Major and minor come from `"version"` in `package.json`; the last number is the release workflow's run number. Changes that only touch documentation do not release.
 
-Each release is signed with tscircuit's Apple Developer ID and notarized by Apple. T3 Code's packaging script only signs when its own passkey sign-in is configured (a provisioning profile and a sign-in domain that tscircuit desktop does not use), so the release workflow signs the finished app itself, with `scripts/sign-macos.sh`.
+The Mac app is signed with tscircuit's Apple Developer ID and notarized by Apple. T3 Code's packaging script only signs the Mac app when its own passkey sign-in is configured (a provisioning profile and a sign-in domain that tscircuit desktop does not use), so the release workflow signs the finished app itself, with `scripts/sign-macos.sh`.
+
+Windows releases use the same Azure Artifact Signing profile as [tscircuit-standalone](https://github.com/tscircuit/tscircuit-standalone/blob/main/.github/workflows/sign-windows.yml). The `windows-signing` GitHub environment is restricted to `main`. Its six `AZURE_*` variables configure GitHub OIDC login and the certificate profile. The Windows job installs the package and checks the timestamped Authenticode signatures before the release is published. Windows pull requests build unsigned installers for testing.
 
 **The app does not update itself yet.** Releases are built without an update feed, and the app says updates are unavailable. To update, install a newer release.
 
@@ -158,7 +164,7 @@ Still shared, or not yet separate:
 
 - **The agents' own data.** Claude Code, Codex and the others keep their sign-in and history in their own folders, whichever app starts them.
 - **Per-branch git settings.** Both apps record a branch's base and pull request under the same `branch.<name>.t3-…` keys in a repository's git config.
-- **Linux and Windows package names.** A Linux package would still install a binary named `t3code`. No such package is built yet; this has to change before one is.
+- **Linux package names.** A Linux package would still install a binary named `t3code`. No such package is built yet; this has to change before one is.
 - **Remote machines.** Connecting to another computer over SSH installs T3's server there, which uses T3 Code's names on that machine.
 
 ## Privacy
@@ -175,7 +181,7 @@ This list covers what was checked while building the rename. It is not a full au
 ## Known gaps
 
 - **Some T3 names remain on purpose.** T3 Connect and T3 Chat keep their names because they are T3's own services, agents still see the app's tools under the name `t3-code`, and `npx t3` in the app's text means T3's package on npm. See "Beside T3 Code" for what is separate.
-- **No automatic updates, and Apple Silicon only.** To update, install a newer release (see "Releases and automatic updates"). No Intel Mac, Windows or Linux package has been built.
+- **No automatic updates.** To update, install a newer release (see "Releases and automatic updates"). Releases support Apple Silicon and Windows x64. The Windows installer ships the native runtime without the optional WSL runtime archive.
 - **The bundled skill is only as new as the build.** It is refreshed when a release is built, not while the app runs.
 - **"Report a problem" still files to T3 Code.** The built-in triage agent is written to search and open issues in T3 Code's repository. It needs rewriting for this repository before the app is given to users.
 - **The server's own updater still looks at T3 Code's releases.** It applies to servers started with `tscircuit-desktop` from a terminal, not to the desktop app.
