@@ -18,19 +18,22 @@ import { cn } from "~/lib/utils";
 import { type CircuitViewHelp, CircuitViewHelpDialog } from "./CircuitViewHelpDialog";
 import {
   appendToPrompt,
-  CIRCUIT_VIEWS,
+  canBePreferred,
   type CircuitPanelState,
   circuitPanelReducer,
   type CircuitScreen,
   type CircuitViewAction,
   countErrors,
-  DEFAULT_CIRCUIT_VIEW,
   fixErrorPrompt,
+  hasStandingTab,
   initialCircuitPanelState,
+  preferredViewFrom,
   type RenderedViewId,
+  type StandingViewId,
   unmutedViews,
   VIEW_HELP,
   viewStateForFile,
+  viewTabs,
 } from "./circuitViews";
 import { type LoadedProject, loadProjectFsMap, pickEntryFile } from "./projectFsMap";
 import { parseViewerMessage, viewerFileProps, viewerTabProps } from "./runframeMessages";
@@ -50,7 +53,6 @@ const REFRESH_INTERVAL_MS = 3_000;
 /** Larger projects refresh on focus and after agent work, not on a timer. */
 const MAX_FILES_TO_POLL = 40;
 const PREFERRED_VIEW_STORAGE_KEY = "tscircuit-desktop:circuit-view";
-const PreferredView = Schema.Literals(["source", "pcb", "schematic", "cad", "system", "assembly"]);
 
 type PanelAction = CircuitViewAction & { readonly file: string };
 
@@ -87,10 +89,10 @@ export default function CircuitPanel(props: {
   const [viewerAttempt, setViewerAttempt] = useState(0);
   const [panelState, dispatch] = useReducer(
     circuitPanelReducer,
-    getLocalStorageItem(PREFERRED_VIEW_STORAGE_KEY, PreferredView) ?? DEFAULT_CIRCUIT_VIEW,
+    preferredViewFrom(getLocalStorageItem(PREFERRED_VIEW_STORAGE_KEY, Schema.String)),
     initialCircuitPanelState,
   );
-  const [helpFor, setHelpFor] = useState<RenderedViewId | null>(null);
+  const [helpFor, setHelpFor] = useState<StandingViewId | null>(null);
   const [projectState, setProjectState] = useState<ProjectState>({ status: "loading" });
 
   const project = projectState.status === "ready" ? projectState.project : null;
@@ -169,10 +171,12 @@ export default function CircuitPanel(props: {
   const pickScreen = (screen: CircuitScreen) => {
     if (entryFile === null) return;
     if (screen !== "source" && screen !== "errors" && !unmuted.has(screen)) {
-      setHelpFor(screen);
+      if (hasStandingTab(screen)) setHelpFor(screen);
       return;
     }
-    if (screen !== "errors") setLocalStorageItem(PREFERRED_VIEW_STORAGE_KEY, screen, PreferredView);
+    if (canBePreferred(screen)) {
+      setLocalStorageItem(PREFERRED_VIEW_STORAGE_KEY, screen, Schema.String);
+    }
     dispatch({ type: "user_picked", file: entryFile, screen });
   };
   const addToPrompt = (prompt: string) => {
@@ -187,6 +191,7 @@ export default function CircuitPanel(props: {
     <div className="flex min-h-0 flex-1 flex-col bg-background" data-circuit-panel>
       {entryFile === null ? null : (
         <CircuitViewTabs
+          tabs={viewTabs(view)}
           screen={view.screen}
           unmuted={unmuted}
           errorCount={countErrors(view.counts) + (view.executionError === null ? 0 : 1)}
@@ -228,7 +233,7 @@ export default function CircuitPanel(props: {
 
 /** A view is muted for want of an element, or because the file threw before rendering anything. */
 function helpForView(
-  viewId: RenderedViewId,
+  viewId: StandingViewId,
   view: CircuitPanelState["view"],
   relativePath: string,
 ): CircuitViewHelp {
@@ -246,6 +251,7 @@ function helpForView(
 
 /** The views as tabs. A muted one has nothing to show, and says how to change that when pressed. */
 function CircuitViewTabs(props: {
+  readonly tabs: ReturnType<typeof viewTabs>;
   readonly screen: CircuitScreen;
   readonly unmuted: ReadonlySet<RenderedViewId>;
   readonly errorCount: number;
@@ -265,7 +271,7 @@ function CircuitViewTabs(props: {
             if (next !== undefined) props.onPick(next);
           }}
         >
-          {CIRCUIT_VIEWS.map((view) => {
+          {props.tabs.map((view) => {
             const muted = view.id !== "source" && !props.unmuted.has(view.id);
             return muted ? (
               <Tooltip key={view.id}>

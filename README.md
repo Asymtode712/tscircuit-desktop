@@ -43,7 +43,7 @@ Then, in the app:
 
 1. Add a project folder that contains a tscircuit project.
 2. Connect an agent under **Settings → Providers**. T3 Code drives the agent CLIs on your machine, so you sign in to Claude Code or Codex (ChatGPT) the way those tools normally do.
-3. Open the right panel and pick **Circuit** (or press `C` in the panel's "+" menu). The tab shows the project's entry file, with a row of views: Source, PCB, Schematic, 3D, System and Assembly.
+3. Open the right panel and pick **Circuit** (or press `C` in the panel's "+" menu). The tab shows the project's entry file, with a row of views: Source, PCB, Schematic, 3D, System and BOM, and Drawings when the design has drawings.
 4. Open any `.tsx` file, from the Files tab or a link in the chat, and the Circuit tab switches to that file. The tab is named after the file it shows.
 5. A view the file has nothing for is greyed out. Click it for a short example of what to add, and a button that puts the request in your prompt.
 
@@ -111,7 +111,7 @@ The **Bump T3 Code** workflow does this daily and opens a pull request when ever
 | The [tscircuit skill](https://github.com/tscircuit/skill) is bundled and installed for agents when the app starts | `skill.json`, `overlay/apps/server/src/tscircuit/`, one patch |
 | A **Circuit** tab in the right panel that renders a tscircuit file with RunFrame | `overlay/apps/web/src/tscircuit/` |
 | RunFrame, its eval worker and manifold-3d are bundled into the app and served on a host of their own | `viewer.json`, `scripts/lib/viewer.ts`, `overlay/apps/web/public/tscircuit-viewer/`, `overlay/apps/desktop/src/tscircuit/`, one patch |
-| The Circuit tab's own row of views (Source, PCB, Schematic, 3D, System, Assembly) in place of RunFrame's header; views with nothing to show are greyed out and explain how to fill them | `circuitViews.ts`, `CircuitPanel.tsx`, `CircuitViewHelpDialog.tsx` in that folder |
+| The Circuit tab's own row of views (Source, PCB, Schematic, 3D, System, BOM, and Drawings when there are any) in place of RunFrame's header; views with nothing to show are greyed out and explain how to fill them | `circuitViews.ts`, `CircuitPanel.tsx`, `CircuitViewHelpDialog.tsx` in that folder |
 | Opening a `.tsx` file shows it in the Circuit tab | `circuitSurface.ts` in that folder, called from `patches/apps__web__src__rightPanelStore.ts.patch` |
 | Circuit appears in the panel's launcher and "+" menu, and can be reopened after closing | Four patches |
 
@@ -188,7 +188,7 @@ This list covers what was checked while building the rename. It is not a full au
 - **A few of T3 Code's own tests fail after the renames.** They use the old name as test data or check an upstream link. `npm run check:app` does not run them; see `docs/research.md` for the list.
 - **The viewer is the app's copy, not the project's.** A project that installs its own `tscircuit` in `node_modules` is still rendered with the version the app was built with. The viewer adds about 64 MB to the app.
 - **The Source view is read-only.** `.tsx` files open in the Circuit tab, where Source shows the text but does not edit it. A link to a specific line still opens T3 Code's editor. `.tsx` files that are not circuits open on Source, with the other views greyed out or an error listed.
-- **No PCB view when the app is used from a browser.** The PCB view draws with WebGPU in a worker, and a worker in a frame without an origin gets no WebGPU. The desktop app is not affected. Schematic, 3D, System and Assembly work in both.
+- **No PCB view when the app is used from a browser.** The PCB view draws with WebGPU in a worker, and a worker in a frame without an origin gets no WebGPU. The desktop app is not affected. Schematic, 3D, System and BOM work in both.
 - **Imports from npm packages are untested.** The viewer gets the project's own source files, not `node_modules`, and resolves packages itself.
 - **Large projects are capped.** The tab reads up to 200 source files or 2 MB and says so when it leaves files out. Projects over 40 files refresh on agent edits and window focus only, not on every save.
 - **Not yet tried with a real agent turn.** Switching files and live refresh were tested by hand; no signed-in agent was available where this was built.
