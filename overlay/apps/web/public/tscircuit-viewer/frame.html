@@ -116,6 +116,115 @@
             return createManifold({ wasmBinary, locateFile: (path) => path });
           };
         }
+
+        // An autorouter bug report needs what the autorouter was given: the Simple Route
+        // JSON on each "autorouting:start" event of the run. RunFrame listens for those
+        // on its eval worker, which it keeps in `globalThis.runFrameWorker`, and tells a
+        // page around it nothing of them. So its listeners are wrapped here: this page
+        // keeps each phase's input, tells the app which phases the run had, and hands
+        // one input over when the app asks. See apps/web/src/tscircuit/autorouterPhases.ts.
+        const PHASE_FIELDS = [
+          "subcircuit_id",
+          "componentDisplayName",
+          "phaseName",
+          "routingPhaseIndex",
+          "phaseOrdinal",
+          "phaseCount",
+          "phaseStageIndex",
+          "phaseStageCount",
+          "connectionCount",
+          "obstacleCount",
+          "isReroutePhase",
+          "autorouterName",
+          "solverName",
+        ];
+        const PHASE_STATUS = {
+          "autorouting:start": "running",
+          "autorouting:end": "complete",
+          "autorouting:error": "error",
+        };
+        let runCount = 0;
+        let phases = [];
+        const phaseInputs = new Map();
+        const tellApp = (message) => window.parent?.postMessage(message, "*");
+        const tellPhases = () =>
+          tellApp({ tscircuit_desktop_type: "autorouter_phases", phases });
+        const sameUnlessMissing = (a, b) => a === undefined || b === undefined || a === b;
+        const recordPhaseEvent = (name, event) => {
+          if (typeof event !== "object" || event === null) return;
+          if (name === "autorouting:start") {
+            const phase = { id: `run${runCount}-phase${phases.length + 1}`, status: "running" };
+            for (const field of PHASE_FIELDS) {
+              if (event[field] !== undefined && event[field] !== null) phase[field] = event[field];
+            }
+            if (event.simpleRouteJson) phaseInputs.set(phase.id, event.simpleRouteJson);
+            phases = [...phases, phase];
+          } else {
+            // The newest running phase of the same group that the event does not contradict.
+            const phase = phases.findLast(
+              (candidate) =>
+                candidate.status === "running" &&
+                candidate.subcircuit_id === event.subcircuit_id &&
+                sameUnlessMissing(candidate.phaseOrdinal, event.phaseOrdinal) &&
+                sameUnlessMissing(candidate.phaseStageIndex, event.phaseStageIndex),
+            );
+            if (!phase) return;
+            const ended = { ...phase, status: PHASE_STATUS[name] };
+            if (typeof event.error?.message === "string") ended.errorMessage = event.error.message;
+            phases = phases.map((candidate) => (candidate === phase ? ended : candidate));
+          }
+          tellPhases();
+        };
+        const tappedWorkers = new WeakSet();
+        const tapWorker = (worker) => {
+          if (typeof worker !== "object" || worker === null || tappedWorkers.has(worker)) return;
+          const { on, executeWithFsMap } = worker;
+          if (typeof on !== "function" || typeof executeWithFsMap !== "function") return;
+          tappedWorkers.add(worker);
+          worker.on = (name, listener) =>
+            on.call(
+              worker,
+              name,
+              name in PHASE_STATUS
+                ? (event) => {
+                    // A fault in the report's bookkeeping must not reach RunFrame's own listener.
+                    try {
+                      recordPhaseEvent(name, event);
+                    } catch (error) {
+                      console.error(error);
+                    }
+                    return listener(event);
+                  }
+                : listener,
+            );
+          worker.executeWithFsMap = (...args) => {
+            runCount += 1;
+            phases = [];
+            phaseInputs.clear();
+            tellPhases();
+            return executeWithFsMap.apply(worker, args);
+          };
+        };
+        let runFrameWorker = globalThis.runFrameWorker;
+        Object.defineProperty(globalThis, "runFrameWorker", {
+          configurable: true,
+          enumerable: true,
+          get: () => runFrameWorker,
+          set: (worker) => {
+            runFrameWorker = worker;
+            tapWorker(worker);
+          },
+        });
+        window.addEventListener("message", (event) => {
+          if (event.source !== window.parent) return;
+          const message = event.data;
+          if (message?.tscircuit_desktop_type !== "get_autorouter_phase_input") return;
+          tellApp({
+            tscircuit_desktop_type: "autorouter_phase_input",
+            request_id: message.request_id,
+            simple_route_json: phaseInputs.get(message.phase_id) ?? null,
+          });
+        });
       })();
     </script>
     <script src="./runframe.min.js"></script>

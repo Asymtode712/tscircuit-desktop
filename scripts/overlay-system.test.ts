@@ -364,7 +364,7 @@ test("the viewer named in viewer.json is bundled from npm packages, and never ex
   const registry = join(repo, "..", "registry")
   publishToFakeRegistry(registry, "tscircuit", "1.2.3", {
     "package.json": JSON.stringify({ dependencies: { "@tscircuit/eval": "^0.0.7" } }),
-    "dist/browser.min.js": "/* RunFrame and its worker */ runframe_capabilities",
+    "dist/browser.min.js": "/* RunFrame and its worker */ runframe_capabilities runFrameWorker",
   })
   publishToFakeRegistry(registry, "manifold-3d", "3.5.1", {
     "manifold.js": "export default () => ({})",
@@ -405,6 +405,16 @@ test("the viewer named in viewer.json is bundled from npm packages, and never ex
   const tooOld = script("setup", "--no-install")
   assert.notEqual(tooOld.status, 0)
   assert.match(tooOld.stderr, /cannot be used as the circuit viewer/)
+
+  // So does one that moved its eval worker, which the viewer's page listens on for autorouter bug reports.
+  publishToFakeRegistry(registry, "tscircuit", "1.2.4", {
+    "package.json": "{}",
+    "dist/browser.min.js": "/* a RunFrame that keeps its worker elsewhere */ runframe_capabilities",
+  })
+  configure("1.2.4")
+  const movedWorker = script("setup", "--no-install")
+  assert.notEqual(movedWorker.status, 0)
+  assert.match(movedWorker.stderr, /no longer keeps its eval worker/)
 
   // A package that is not what the registry says it is stops the build too.
   writeFileSync(join(registry, "tscircuit", "1.2.3.tgz"), "not the tarball that was published")

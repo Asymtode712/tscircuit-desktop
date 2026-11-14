@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { parseViewerMessage, viewerFileProps, viewerTabProps } from "./runframeMessages";
+import {
+  parseViewerMessage,
+  phaseInputRequest,
+  viewerFileProps,
+  viewerTabProps,
+} from "./runframeMessages";
 
 describe("parseViewerMessage", () => {
   it("is ready only for a RunFrame that takes the app's tab and reports its renders", () => {
@@ -49,6 +54,38 @@ describe("parseViewerMessage", () => {
     ).toEqual({ kind: "tab_requested", tab: "schematic" });
   });
 
+  it("reads what the frame says of the run's autorouting", () => {
+    expect(
+      parseViewerMessage({
+        tscircuit_desktop_type: "autorouter_phases",
+        phases: [{ id: "run1-phase1", status: "running", connectionCount: 2 }, "junk"],
+      }),
+    ).toEqual({
+      kind: "autorouter_phases",
+      phases: [{ id: "run1-phase1", status: "running", connectionCount: 2 }],
+    });
+    expect(
+      parseViewerMessage({
+        tscircuit_desktop_type: "autorouter_phase_input",
+        request_id: "7",
+        simple_route_json: { layerCount: 2 },
+      }),
+    ).toEqual({
+      kind: "autorouter_phase_input",
+      requestId: "7",
+      simpleRouteJson: { layerCount: 2 },
+    });
+    // The frame no longer has a phase of an earlier run.
+    expect(
+      parseViewerMessage({ tscircuit_desktop_type: "autorouter_phase_input", request_id: "8" }),
+    ).toEqual({ kind: "autorouter_phase_input", requestId: "8", simpleRouteJson: null });
+    expect(phaseInputRequest("7", "run1-phase1")).toEqual({
+      tscircuit_desktop_type: "get_autorouter_phase_input",
+      request_id: "7",
+      phase_id: "run1-phase1",
+    });
+  });
+
   it.each([null, "ready", [], {}, { runframe_type: "runframe_event" }, { type: "other" }])(
     "ignores %j",
     (data) => {
@@ -66,11 +103,21 @@ describe("viewer props", () => {
 
   it("sends files with the header off and a tab, also while the source is on screen", () => {
     const files = { fsMap: { "index.tsx": "x" }, mainComponentPath: "index.tsx" };
-    expect(viewerFileProps({ ...files, screen: "source" })).toMatchObject({
+    expect(viewerFileProps({ ...files, screen: "source", rebuilds: 0 })).toMatchObject({
       ...files,
       showHeader: false,
       // Source has no tab in the viewer, so the board waits behind it.
       activeTab: "pcb",
     });
+  });
+
+  it("changes a file no circuit reads to build the same files again", () => {
+    const files = { fsMap: { "index.tsx": "x" }, mainComponentPath: "index.tsx" };
+    const build = (rebuilds: number) =>
+      viewerFileProps({ ...files, screen: "pcb", rebuilds }).fsMap as Record<string, string>;
+    expect(build(0)).toBe(files.fsMap);
+    expect(build(1)).toMatchObject(files.fsMap);
+    expect(build(1)).not.toEqual(build(0));
+    expect(build(2)).not.toEqual(build(1));
   });
 });
