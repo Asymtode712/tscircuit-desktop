@@ -183,26 +183,28 @@ notarize() {
     return 1
   fi
 }
-staple() {
-  local file="$1" action attempt status
-  for action in staple validate; do
-    for attempt in 1 2 3 4 5 6; do
-      status=0
-      xcrun stapler "$action" "$file" > "$signing_dir/stapler.txt" 2>&1 || status=$?
-      cat "$signing_dir/stapler.txt"
-      if [ "$status" -eq 0 ]; then break; fi
-      # Status 68 also covers permanent ticket errors. Retry only when Apple's
-      # output names a network failure, never a TLS or trust error. Apple's
-      # ticket service has dropped connections for most of a minute, so the
-      # six attempts are spread over about five.
-      if [ "$attempt" -eq 6 ] || [ "$status" -ne 68 ] ||
-        ! grep -Eq 'Error Domain=NSURLErrorDomain Code=-(1001|1003|1004|1005|1006|1009)([^0-9]|$)' "$signing_dir/stapler.txt"; then
-        return "$status"
-      fi
-      echo "Apple's ticket service dropped the connection; trying $action again in $((attempt * 20)) seconds."
-      sleep $((attempt * 20))
-    done
+# Apple's ticket service has dropped connections for most of a minute, so the
+# six attempts are spread over about five.
+stapler_with_retry() {
+  local action="$1" file="$2" attempt status
+  for attempt in 1 2 3 4 5 6; do
+    status=0
+    xcrun stapler "$action" "$file" > "$signing_dir/stapler.txt" 2>&1 || status=$?
+    cat "$signing_dir/stapler.txt"
+    if [ "$status" -eq 0 ]; then return 0; fi
+    # Status 68 also covers permanent ticket errors. Retry only when Apple's
+    # output names a network failure, never a TLS or trust error.
+    if [ "$attempt" -eq 6 ] || [ "$status" -ne 68 ] ||
+      ! grep -Eq 'Error Domain=NSURLErrorDomain Code=-(1001|1003|1004|1005|1006|1009)([^0-9]|$)' "$signing_dir/stapler.txt"; then
+      return "$status"
+    fi
+    echo "Apple's ticket service dropped the connection; trying $action again in $((attempt * 20)) seconds."
+    sleep $((attempt * 20))
   done
+}
+staple() {
+  stapler_with_retry staple "$1"
+  stapler_with_retry validate "$1"
 }
 
 # notarytool takes an archive, not a folder. The ticket is then stapled to the
@@ -237,7 +239,7 @@ phase="archive verification"
 mkdir "$signing_dir/check"
 ditto -x -k "$signing_dir/app.zip" "$signing_dir/check"
 codesign --verify --deep --strict "$signing_dir/check/$(basename "$app")"
-xcrun stapler validate "$signing_dir/check/$(basename "$app")"
+stapler_with_retry validate "$signing_dir/check/$(basename "$app")"
 
 # Only files that passed every check above reach the output directory.
 phase="publishing the files"
