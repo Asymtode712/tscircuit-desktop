@@ -1,5 +1,6 @@
-import type { EnvironmentId } from "@t3tools/contracts";
+import type { EnvironmentId, ScopedThreadRef } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
+import { ShoppingCart } from "lucide-react";
 import { type Dispatch, type RefObject, useEffect, useReducer, useRef, useState } from "react";
 
 import { ReadOnlySourcePreview } from "~/components/files/AttachmentFilePreview";
@@ -39,6 +40,7 @@ import {
   viewStateForFile,
   viewTabs,
 } from "./circuitViews";
+import { openOrderPane } from "./orderActions";
 import {
   type LoadedProject,
   loadProjectFsMap,
@@ -129,7 +131,7 @@ function sameFiles(a: ProjectFsMap | null, b: ProjectFsMap | null): boolean {
 }
 
 /** Files that did not change keep their identity, so the viewer is not asked to render again. */
-function keepUnchangedFiles(current: LoadedProject, loaded: LoadedProject): LoadedProject {
+export function keepUnchangedFiles(current: LoadedProject, loaded: LoadedProject): LoadedProject {
   const fsMap = sameFiles(current.fsMap, loaded.fsMap) ? current.fsMap : loaded.fsMap;
   const hashedFiles = sameFiles(current.hashedFiles, loaded.hashedFiles)
     ? current.hashedFiles
@@ -157,7 +159,7 @@ type BuiltCircuit =
  * are now. A build that is missing or out of date is looked for again after agent work and
  * on focus. One that is current is kept: the same sources build the same circuit.
  */
-function useBuiltCircuit(input: {
+export function useBuiltCircuit(input: {
   readonly environmentId: EnvironmentId;
   readonly cwd: string | undefined;
   readonly visible: boolean;
@@ -226,6 +228,8 @@ export default function CircuitPanel(props: {
   readonly workspaceMutationId: string | null;
   /** The composer that "Add to prompt" writes to. */
   readonly composerDraftTarget: ComposerThreadTarget;
+  /** The thread whose panel this tab is in, where its Order button opens the Order tab. */
+  readonly threadRef: ScopedThreadRef;
 }) {
   const { environmentId, cwd, relativePath, visible, workspaceMutationId } = props;
   const [viewerAttempt, setViewerAttempt] = useState(0);
@@ -368,6 +372,7 @@ export default function CircuitPanel(props: {
           errorCount={countErrors(view.counts) + (view.executionError === null ? 0 : 1)}
           running={view.running}
           onPick={pickScreen}
+          onOrder={() => openOrderPane(props.threadRef)}
         />
       )}
       <div className="relative flex min-h-0 flex-1 flex-col">
@@ -467,6 +472,7 @@ function CircuitViewTabs(props: {
   readonly errorCount: number;
   readonly running: boolean;
   readonly onPick: (screen: CircuitScreen) => void;
+  readonly onOrder: () => void;
 }) {
   return (
     <div className={cn(FILE_SURFACE_SUBHEADER_CLASS, "justify-between")}>
@@ -509,7 +515,19 @@ function CircuitViewTabs(props: {
           ) : null}
         </ToggleGroup>
       </div>
-      {props.running ? <Spinner className="size-3.5" /> : null}
+      <div className="flex shrink-0 items-center gap-2">
+        {props.running ? <Spinner className="size-3.5" /> : null}
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Button size="icon-xs" variant="outline" aria-label="Order" onClick={props.onOrder}>
+                <ShoppingCart />
+              </Button>
+            }
+          />
+          <TooltipPopup side="bottom">Order this board</TooltipPopup>
+        </Tooltip>
+      </div>
     </div>
   );
 }
@@ -641,11 +659,11 @@ function CircuitViewer(props: {
   );
 }
 
-function Cover(props: { readonly children: React.ReactNode }) {
+export function Cover(props: { readonly children: React.ReactNode }) {
   return <div className="absolute inset-0 flex items-center justify-center">{props.children}</div>;
 }
 
-function Notice(props: {
+export function Notice(props: {
   readonly title: string;
   readonly description?: string;
   readonly busy?: boolean;

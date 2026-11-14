@@ -107,6 +107,8 @@ export interface CircuitViewState {
   /** The message of a run that threw before it rendered anything. */
   readonly executionError: string | null;
   readonly running: boolean;
+  /** Runs of this file that have ended, which tells one rendered circuit from the next. */
+  readonly completedRuns: number;
 }
 
 export type CircuitViewAction =
@@ -127,6 +129,7 @@ const initialCircuitViewState = (preferred: CircuitViewId): CircuitViewState => 
   counts: null,
   executionError: null,
   running: false,
+  completedRuns: 0,
 });
 
 /** Leaves the errors screen it was sent to, once there is no error to show. */
@@ -167,10 +170,10 @@ function circuitViewReducer(state: CircuitViewState, action: CircuitViewAction):
       return { ...state, running: true };
     case "circuit_rendered":
       return withViewPicked(withErrorCleared({ ...state, counts: action.counts }));
-    case "run_completed":
-      return action.failed
-        ? { ...state, running: false }
-        : withErrorCleared({ ...state, running: false });
+    case "run_completed": {
+      const ended = { ...state, running: false, completedRuns: state.completedRuns + 1 };
+      return action.failed ? ended : withErrorCleared(ended);
+    }
     case "run_failed": {
       const failed = {
         ...state,

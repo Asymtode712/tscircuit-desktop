@@ -1,15 +1,15 @@
-Passes the "open the Circuit tab" action to the right panel's tab strip.
+Passes the action that opens the Circuit or the Order tab to the right panel's tab strip.
 
 diff --git a/apps/web/src/components/ChatView.tsx b/apps/web/src/components/ChatView.tsx
-index dc3fcfa8f48c95fa73cf42b97df5ae7be46f1599..ce6fee7253ba513055ca86da5003bfcebbbcb9a6 100644
+index dc3fcfa8f48c95fa73cf42b97df5ae7be46f1599..7a9fd9377b81f046bdb98d0b8bc1a599b5e36313 100644
 --- a/apps/web/src/components/ChatView.tsx
 +++ b/apps/web/src/components/ChatView.tsx
 @@ -3996,6 +3996,9 @@ export default function ChatView(props: ChatViewProps) {
            onAddTerminal={addTerminalSurfaceStable}
            onAddDiff={addDiffSurfaceStable}
            onAddFiles={addFilesSurfaceStable}
-+          onAddCircuit={() => {
-+            if (activeThreadRef) useRightPanelStore.getState().open(activeThreadRef, "circuit");
++          onAddTscircuitTab={(kind) => {
++            if (activeThreadRef) useRightPanelStore.getState().open(activeThreadRef, kind);
 +          }}
            onAddPullRequest={addPullRequestSurfaceStable}
            onAddPullRequests={addPullRequestsSurfaceStable}

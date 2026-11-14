@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { isProjectSourceFile, pickEntryFile, shouldWalkDirectory } from "./projectFsMap";
+import {
+  circuitFileCandidates,
+  isProjectSourceFile,
+  pickEntryFile,
+  pickFileToOrder,
+  shouldWalkDirectory,
+} from "./projectFsMap";
 
 describe("pickEntryFile", () => {
   it("prefers the entrypoint named in tscircuit.config.json", () => {
@@ -28,6 +34,46 @@ describe("pickEntryFile", () => {
 
   it("returns null when the project has no .tsx file", () => {
     expect(pickEntryFile({ "package.json": "{}", "lib/math.ts": "" })).toBeNull();
+  });
+});
+
+describe("pickFileToOrder", () => {
+  const fsMap = {
+    "index.tsx": "",
+    "boards/led.tsx": "",
+    "boards/motor.tsx": "",
+    "lib/math.ts": "",
+  };
+
+  it("lists the files that may hold a circuit, the entry file first", () => {
+    expect(circuitFileCandidates(fsMap)).toEqual([
+      "index.tsx",
+      "boards/led.tsx",
+      "boards/motor.tsx",
+    ]);
+    expect(circuitFileCandidates({ "lib/math.ts": "" })).toEqual([]);
+  });
+
+  it("orders the file chosen in the Order tab, over what the Circuit tab shows", () => {
+    expect(
+      pickFileToOrder({ fsMap, chosen: "boards/motor.tsx", circuitTabFile: "boards/led.tsx" }),
+    ).toBe("boards/motor.tsx");
+  });
+
+  it("orders what the Circuit tab shows when nothing was chosen, or the choice is gone", () => {
+    expect(pickFileToOrder({ fsMap, chosen: null, circuitTabFile: "boards/led.tsx" })).toBe(
+      "boards/led.tsx",
+    );
+    expect(pickFileToOrder({ fsMap, chosen: "deleted.tsx", circuitTabFile: undefined })).toBe(
+      "index.tsx",
+    );
+  });
+
+  it("asks only when there is no Circuit tab and more than one circuit", () => {
+    expect(pickFileToOrder({ fsMap, chosen: null, circuitTabFile: null })).toBeNull();
+    expect(
+      pickFileToOrder({ fsMap: { "board.tsx": "" }, chosen: null, circuitTabFile: null }),
+    ).toBe("board.tsx");
   });
 });
 

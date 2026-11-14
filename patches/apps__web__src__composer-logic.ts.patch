@@ -1,0 +1,15 @@
+Makes `order` one of the composer's own slash commands, for `/order`.
+
+diff --git a/apps/web/src/composer-logic.ts b/apps/web/src/composer-logic.ts
+index 37fef411897fcb339148421be0e3504166aae1da..9cf064771428d86bb994fce76afe9e3bcde5c59b 100644
+--- a/apps/web/src/composer-logic.ts
++++ b/apps/web/src/composer-logic.ts
+@@ -18,7 +18,7 @@ import {
+ import { resolveShortcutCommand, type ShortcutEventLike } from "./keybindings";
+ 
+ export type ComposerTriggerKind = "path" | "pull-request" | "slash-command" | "skill";
+-export type ComposerSlashCommand = "model" | "side" | "btw" | "clear";
++export type ComposerSlashCommand = "model" | "side" | "btw" | "clear" | "order";
+ export type ComposerSubmissionIntent = "foreground" | "background" | "alternate";
+ 
+ export interface ComposerTrigger {
