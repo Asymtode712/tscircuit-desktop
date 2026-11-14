@@ -1,8 +1,9 @@
 Use standalone’s Azure Artifact Signing hook on Windows so Electron Builder signs and verifies the app, native binaries, installer, and uninstaller as it packages them.
 Allow up to 100 Windows payload files. The desktop x64 build currently ships 90.
+Run tscircuit-after-pack.cjs after packing: it does what T3 Code's own hook does, then gives the updater a download folder of its own, so this app and T3 Code do not clear each other's pending updates.
 
 diff --git a/scripts/build-desktop-artifact.ts b/scripts/build-desktop-artifact.ts
-index 6668d46544bbe17d235b312b99f28aa8cd11bc48..4fc1dfb1f5518922338c7b414c75e7b738e1460e 100644
+index 6668d46544bbe17d235b312b99f28aa8cd11bc48..78071b0f6c772180141b9f28c4a7875da3a629f1 100644
 --- a/scripts/build-desktop-artifact.ts
 +++ b/scripts/build-desktop-artifact.ts
 @@ -1061,7 +1061,7 @@ export function resolveWindowsServerAsarIgnoreGlobs(arch: typeof BuildArch.Type)
@@ -14,7 +15,18 @@ index 6668d46544bbe17d235b312b99f28aa8cd11bc48..4fc1dfb1f5518922338c7b414c75e7b7
  export const WINDOWS_SERVER_RESOURCE_SOURCE_DIR = "apps/desktop/prod-resources/windows-server";
  export const WINDOWS_SERVER_EXTRA_RESOURCES = [
    {
-@@ -2964,7 +2964,13 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
+@@ -2780,7 +2780,9 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
+   arch?: typeof BuildArch.Type,
+ ) {
+   const buildConfig: Record<string, unknown> = {
+-    afterPack: (yield* Path.Path).join(yield* RepoRoot, "scripts/prepare-server-compile-cache.cjs"),
++    afterPack: yield* (yield* Path.Path).fromFileUrl(
++      new URL("./tscircuit-after-pack.cjs", import.meta.url),
++    ),
+     appId: DESKTOP_APP_ID,
+     productName: resolveDesktopProductName(version),
+     artifactName: "tscircuit-desktop-${version}-${arch}.${ext}",
+@@ -2964,7 +2966,13 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
        signAndEditExecutable: true,
      };
      if (signed && (yield* HostProcess.Platform) === "win32") {

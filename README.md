@@ -135,12 +135,7 @@ The Mac app is signed with tscircuit's Apple Developer ID and notarized by Apple
 
 Windows releases use the same Azure Artifact Signing profile as [tscircuit-standalone](https://github.com/tscircuit/tscircuit-standalone/blob/main/.github/workflows/sign-windows.yml). The `windows-signing` GitHub environment is restricted to `main`. Its six `AZURE_*` variables configure GitHub OIDC login and the certificate profile. The Windows job installs the package and checks the timestamped Authenticode signatures before the release is published. Windows pull requests build unsigned installers for testing.
 
-**The app does not update itself yet.** Releases are built without an update feed, and the app says updates are unavailable. To update, install a newer release.
-
-Turning automatic updates on needs:
-
-1. Removing `env -u GITHUB_REPOSITORY` from the release workflow's build step. With the repository visible, the build bakes in this repository's releases as its update feed.
-2. Uploading a `latest-mac.yml` with each release. The one the build produces describes the zip from before signing, so it has to be written again for the signed zip.
+**The app updates itself** from this repository's releases. Each release carries the files the updater reads, `latest-mac.yml` and `latest.yml`; the release workflow writes the Mac one again after signing, since signing changes the zip. Pull request builds never update themselves. Copies installed before this was turned on say updates are unavailable, and need one newer release installed by hand.
 
 ## Beside T3 Code
 
@@ -181,7 +176,7 @@ This list covers what was checked while building the rename. It is not a full au
 ## Known gaps
 
 - **Some T3 names remain on purpose.** T3 Connect and T3 Chat keep their names because they are T3's own services, agents still see the app's tools under the name `t3-code`, and `npx t3` in the app's text means T3's package on npm. See "Beside T3 Code" for what is separate.
-- **No automatic updates.** To update, install a newer release (see "Releases and automatic updates"). Releases support Apple Silicon and Windows x64. The Windows installer ships the native runtime without the optional WSL runtime archive.
+- **Apple Silicon and Windows x64 only.** The Windows installer ships the native runtime without the optional WSL runtime archive.
 - **The bundled skill is only as new as the build.** It is refreshed when a release is built, not while the app runs.
 - **"Report a problem" still files to T3 Code.** The built-in triage agent is written to search and open issues in T3 Code's repository. It needs rewriting for this repository before the app is given to users.
 - **The server's own updater still looks at T3 Code's releases.** It applies to servers started with `tscircuit-desktop` from a terminal, not to the desktop app.
