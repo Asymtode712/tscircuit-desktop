@@ -1,0 +1,32 @@
+Adds "Report autorouter bug" to the command palette. The item is built in apps/web/src/tscircuit/autorouterReportCommand.tsx; this file only lists it among the actions.
+
+diff --git a/apps/web/src/components/CommandPalette.tsx b/apps/web/src/components/CommandPalette.tsx
+index 68049f1f8430ec417c2f25df8d64b26f8f6f10c3..ab0490c31985bb0be456668042cd072d6965ca67 100644
+--- a/apps/web/src/components/CommandPalette.tsx
++++ b/apps/web/src/components/CommandPalette.tsx
+@@ -247,6 +247,7 @@ import {
+ } from "./CommandPaletteAddProject";
+ import { useCommandPaletteThreadItems } from "./CommandPaletteThreadItems";
+ import { useCommandPaletteThemeItems } from "./CommandPaletteThemeItems";
++import { useAutorouterReportItem } from "../tscircuit/autorouterReportCommand";
+ import {
+   CommandPaletteVirtualizedResults,
+   scrollCommandPaletteRowIntoView,
+@@ -517,6 +518,7 @@ function OpenCommandPaletteDialog(props: {
+   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
+   const providersByEnvironment = useEnvironmentProviders();
+   const { changeThemeItem, changeAppearanceItem, themeEditorItem } = useCommandPaletteThemeItems();
++  const autorouterReportItem = useAutorouterReportItem();
+   const currentView = viewStack.at(-1)?.view ?? null;
+   const threadSearchQuery = currentView === null && !isActionsOnly ? deferredQuery : "";
+   const [browseGeneration, setBrowseGeneration] = useState(0);
+@@ -1348,6 +1350,9 @@ function OpenCommandPaletteDialog(props: {
+     });
+   }
+ 
++  // tscircuit desktop: reports a routing problem from the circuit in the Circuit tab.
++  if (autorouterReportItem !== null) actionItems.push(autorouterReportItem);
++
+   if (activeThreadKey !== null && supportsThreadFind) {
+     actionItems.push({
+       kind: "action",

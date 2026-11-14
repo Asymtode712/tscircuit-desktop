@@ -16,6 +16,13 @@ vi.mock(import("./viewerFrame"), () => ({
   viewerFrame: () => ({ src: "about:blank", sandbox: "allow-scripts", targetOrigin: "*" }),
 }));
 
+// Keep the dialog boundary observable without opening external report destinations.
+vi.mock(import("./AutorouterReportDialog"), () => ({
+  AutorouterReportDialog: (props) => (
+    <output data-testid="routing-report">{props.phases.map((phase) => phase.id).join(",")}</output>
+  ),
+}));
+
 import CircuitPanel from "./CircuitPanel";
 
 function send(frame: HTMLIFrameElement, data: unknown) {
@@ -63,6 +70,28 @@ it("caps the split at two, isolates pane navigation/errors, and closes with focu
   const rightFrame = document.querySelectorAll("iframe")[1]!;
   await act(() => ready(rightFrame));
   await act(() => rendered(rightFrame));
+  await act(() => {
+    send(leftFrame, {
+      runframe_type: "runframe_event",
+      runframe_event: {
+        type: "autorouter_phases",
+        phases: [{ id: "primary-route", status: "complete" }],
+      },
+    });
+    send(rightFrame, {
+      runframe_type: "runframe_event",
+      runframe_event: {
+        type: "autorouter_phases",
+        phases: [{ id: "comparison-route", status: "complete" }],
+      },
+    });
+  });
+  await vi.waitFor(() => {
+    expect(document.querySelectorAll('[data-testid="routing-report"]')).toHaveLength(1);
+    expect(document.querySelector('[data-testid="routing-report"]')?.textContent).toBe(
+      "primary-route",
+    );
+  });
   await act(() =>
     send(rightFrame, {
       runframe_type: "runframe_event",
