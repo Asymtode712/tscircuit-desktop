@@ -65,11 +65,15 @@ function tsxFiles(fsMap: ProjectFsMap): string[] {
     .toSorted((a, b) => depth(a) - depth(b) || a.localeCompare(b));
 }
 
-/** The files that may hold a circuit, the project's entry file first. */
+/** The folder imported parts are saved to: components for a board to use, not boards to order. */
+const IMPORTS_DIRECTORY = /(^|\/)imports\//;
+const isImportedPart = (path: string) => IMPORTS_DIRECTORY.test(path);
+
+/** The files that may hold a circuit to order, the project's entry file first. */
 export function circuitFileCandidates(fsMap: ProjectFsMap): string[] {
   const entry = pickEntryFile(fsMap);
-  const others = tsxFiles(fsMap).filter((path) => path !== entry);
-  return entry === null ? others : [entry, ...others];
+  const others = tsxFiles(fsMap).filter((path) => path !== entry && !isImportedPart(path));
+  return entry === null || isImportedPart(entry) ? others : [entry, ...others];
 }
 
 /**
