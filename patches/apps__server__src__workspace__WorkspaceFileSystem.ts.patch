@@ -1,0 +1,34 @@
+Lets the Circuit tab read a `tsci build` output (`dist/<file>/circuit.json`) whole, so a built board is drawn from it instead of being run again. File reads otherwise stop at 1 MB, which a real board's Circuit JSON passes. The limit for those files is in overlay/apps/server/src/tscircuit/builtCircuitJson.ts; this file only asks it.
+
+diff --git a/apps/server/src/workspace/WorkspaceFileSystem.ts b/apps/server/src/workspace/WorkspaceFileSystem.ts
+index 05409c6616ff0ee3c83fe65fa3bc42ae157d593c..c99df4098bed7d157c21b63e41b6257c09af81da 100644
+--- a/apps/server/src/workspace/WorkspaceFileSystem.ts
++++ b/apps/server/src/workspace/WorkspaceFileSystem.ts
+@@ -22,6 +22,7 @@ import * as Path from "effect/Path";
+ import * as Schema from "effect/Schema";
+ 
+ import { makeIsServerInternalPath } from "../auth/serverInternalPaths.ts";
++import { readFileMaxBytes } from "../tscircuit/builtCircuitJson.ts";
+ import * as KnownWorkspaces from "./KnownWorkspaces.ts";
+ import * as WorkspaceEntries from "./WorkspaceEntries.ts";
+ import * as WorkspacePaths from "./WorkspacePaths.ts";
+@@ -404,7 +405,9 @@ export const make = Effect.gen(function* () {
+             });
+           }
+ 
+-          const bytesToRead = Math.min(stat.size, PROJECT_READ_FILE_MAX_BYTES);
++          // tscircuit desktop: a build's Circuit JSON is read whole, past the usual limit.
++          const maxBytes = readFileMaxBytes(target.relativePath, PROJECT_READ_FILE_MAX_BYTES);
++          const bytesToRead = Math.min(stat.size, maxBytes);
+           const buffer = Buffer.alloc(bytesToRead);
+           let offset = 0;
+           while (offset < bytesToRead) {
+@@ -432,7 +435,7 @@ export const make = Effect.gen(function* () {
+             });
+           }
+ 
+-          const truncated = stat.size > PROJECT_READ_FILE_MAX_BYTES;
++          const truncated = stat.size > maxBytes;
+           return {
+             relativePath: target.relativePath,
+             // Streaming decode drops a character the byte limit split, instead of ending in U+FFFD.
