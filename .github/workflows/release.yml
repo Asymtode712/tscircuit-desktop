@@ -1,6 +1,6 @@
 name: Release
 
-# Builds tscircuit desktop for Apple Silicon Macs and Windows x64.
+# Builds tscircuit desktop for Apple Silicon Macs, Windows x64 and Linux x64.
 #
 #   - On every push to main it publishes a GitHub release, v<major>.<minor>.<run>.
 #     Major and minor come from "version" in package.json; the last number is
@@ -13,11 +13,12 @@ name: Release
 # Apple (scripts/sign-macos.sh), so macOS opens a downloaded copy without
 # complaint. The credentials are the secrets tscircuit-standalone signs with.
 # A pull request from a fork gets no secrets; its build is signed ad hoc, for
-# trying out only. Windows releases use Azure Artifact Signing on main.
+# trying out only. Windows releases use Azure Artifact Signing on main. The Linux
+# packages (an AppImage and a .deb) are not signed.
 #
 # A release build carries this repository's releases as its update feed, and
-# each release is published with the files the app's updater reads: latest-mac.yml
-# and latest.yml. A pull request's build has a preview version, which gets no
+# each release is published with the files the app's updater reads: latest-mac.yml,
+# latest.yml and latest-linux.yml. A pull request's build has a preview version, which gets no
 # feed, so it never updates itself. See "Releases and automatic updates" in the
 # README.
 
@@ -172,6 +173,113 @@ jobs:
           retention-days: 14
           compression-level: 0
 
+  linux:
+    name: Linux x64
+    # A fixed release, not ubuntu-latest: the programs built here need at least
+    # the C library of the system that built them, so a newer runner would stop
+    # the app opening on distributions it opens on today.
+    runs-on: ubuntu-24.04
+    needs: version
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      # Builds .t3code/ from the pin, renames.json, overlay/ and patches/, and
+      # downloads what skill.json and viewer.json name.
+      - run: node scripts/setup.ts --no-install
+
+      # From here on use the Node and pnpm versions T3 Code itself asks for.
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .t3code/package.json
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: .t3code/package.json
+      - run: node scripts/setup.ts
+
+      # libsecret and ImageMagick are for the build. The rest is what the app
+      # needs to open on a runner with no display, for the launch check.
+      - name: Install build and launch libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsecret-1-dev pkg-config imagemagick \
+            xvfb libgtk-3-0t64 libnss3 libasound2t64 libgbm1
+
+      # Asking for the AppImage also builds the .deb. The build takes the update
+      # feed from GITHUB_REPOSITORY: the app looks for newer versions in this
+      # repository's releases.
+      - name: Build the app
+        run: |
+          node scripts/run.ts vp run dist:desktop:artifact \
+            --platform linux --target AppImage --arch x64 \
+            --build-version "${{ needs.version.outputs.version }}" --verbose
+
+      - name: Check the packages
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          release="$GITHUB_WORKSPACE/.t3code/release"
+          ls -la "$release"
+          appimage="$release/tscircuit-desktop-$VERSION-x86_64.AppImage"
+          deb="$release/tscircuit-desktop-$VERSION-amd64.deb"
+
+          # Under T3 Code's names the .deb would replace an installed T3 Code.
+          package="$(dpkg-deb -f "$deb" Package)"
+          if [ "$package" != tscircuit-desktop ]; then
+            echo "::error::The .deb is named $package, not tscircuit-desktop."
+            exit 1
+          fi
+          dpkg-deb -c "$deb" | grep ' \./usr/share/applications/tscircuit-desktop-app\.desktop$'
+
+          chmod +x "$appimage"
+          (cd "$RUNNER_TEMP" && "$appimage" --appimage-extract >/dev/null)
+          app="$RUNNER_TEMP/squashfs-root"
+
+          # The build writes latest-linux.yml when it gave the app an update
+          # feed. A release must have one, or every copy installed from it is
+          # stuck. A build with a feed keeps its downloads apart from T3 Code's.
+          if [ -f "$release/latest-linux.yml" ]; then
+            cat "$app/resources/app-update.yml"
+            grep -qx 'updaterCacheDirName: tscircuit-desktop-updater' "$app/resources/app-update.yml"
+            dpkg-deb --fsys-tarfile "$deb" \
+              | tar -xO './opt/tscircuit desktop/resources/app-update.yml' \
+              | grep -qx 'updaterCacheDirName: tscircuit-desktop-updater'
+          elif [ "$GITHUB_EVENT_NAME" != "pull_request" ]; then
+            echo "::error::The build gave the app no update feed, so this release could not update itself."
+            exit 1
+          fi
+
+          # A build can package fine and still not open. T3 Code's launch check
+          # starts the packaged app and waits for a thread to show.
+          cd .t3code
+          xvfb-run -a node scripts/smoke-desktop-app.ts \
+            --artifacts-dir "$RUNNER_TEMP/launch-check" \
+            --executable "$app/tscircuit-desktop-app"
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: tscircuit-desktop-linux-launch-check
+          path: ${{ runner.temp }}/launch-check
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tscircuit-desktop-linux-x64
+          # latest-linux.yml is what the app's updater reads. The build writes
+          # it only for a version that gets an update feed.
+          path: |
+            .t3code/release/*.AppImage
+            .t3code/release/*.deb
+            .t3code/release/latest-linux.yml
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+
   windows-preview:
     if: github.ref != 'refs/heads/main' || github.event_name == 'pull_request'
     needs: version
@@ -193,7 +301,7 @@ jobs:
 
   publish:
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
-    needs: [version, mac, windows]
+    needs: [version, mac, windows, linux]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -210,12 +318,16 @@ jobs:
         with:
           name: tscircuit-desktop-windows-x64
           path: out
+      - uses: actions/download-artifact@v4
+        with:
+          name: tscircuit-desktop-linux-x64
+          path: out
       # An update whose size or hash differs from its manifest is refused by
       # every copy of the app, so nothing is published unless they agree.
       - name: Check the update manifests against the packages
         env:
           VERSION: ${{ needs.version.outputs.version }}
-        run: node scripts/update-manifest.ts check "$VERSION" out/latest-mac.yml out/latest.yml
+        run: node scripts/update-manifest.ts check "$VERSION" out/latest-mac.yml out/latest.yml out/latest-linux.yml
 
       - name: Publish the release
         env:
@@ -227,12 +339,14 @@ jobs:
 
           **Install on Windows x64:** download and run the `.exe` installer.
 
-          The Mac app is signed and notarized by Apple. The Windows installer is signed by tscircuit Inc through Azure Artifact Signing.
+          **Install on Linux x64:** install the `.deb` on Debian or Ubuntu, or download the `.AppImage`, make it executable and run it.
+
+          The Mac app is signed and notarized by Apple. The Windows installer is signed by tscircuit Inc through Azure Artifact Signing. The Linux packages are not signed.
 
           The app updates itself from these releases. A copy that says updates are unavailable was installed before that worked: install a newer release by hand once.
           NOTES
           shopt -s nullglob
-          files=(out/*.dmg out/*.zip out/*.exe out/*.yml out/*.blockmap)
+          files=(out/*.dmg out/*.zip out/*.exe out/*.AppImage out/*.deb out/*.yml out/*.blockmap)
           gh release create "v$VERSION" "${files[@]}" \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
