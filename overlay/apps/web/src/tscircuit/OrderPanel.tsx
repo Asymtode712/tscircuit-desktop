@@ -1,12 +1,13 @@
 import type { EnvironmentId, ScopedThreadRef } from "@t3tools/contracts";
-import { CheckIcon, DownloadIcon, ExternalLinkIcon } from "lucide-react";
-import { Fragment, useEffect, useReducer, useState } from "react";
+import { CheckIcon, ChevronDownIcon, DownloadIcon, ExternalLinkIcon } from "lucide-react";
+import { Fragment, useEffect, useId, useReducer, useState } from "react";
 
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "~/components/ui/alert";
 import { Button } from "~/components/ui/button";
 import { Spinner } from "~/components/ui/spinner";
 import { toastManager } from "~/components/ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
+import { cn } from "~/lib/utils";
 import { selectThreadRightPanelState, useRightPanelStore } from "~/rightPanelStore";
 
 import { expectedBuild } from "./builtCircuit";
@@ -55,28 +56,25 @@ const WHY_UNAVAILABLE: Readonly<Record<OrderFile["needs"], string>> = {
   parts: "Not available: no parts are placed on the board.",
 };
 
+/** A row of a list: the whole row is the control. */
+const ROW_CLASS_NAME =
+  "flex w-full cursor-pointer items-center gap-3 px-3.5 py-2.5 text-left outline-none hover:bg-accent/50 focus-visible:bg-accent/50 aria-disabled:cursor-not-allowed aria-disabled:opacity-64 aria-disabled:hover:bg-transparent";
+
 const MANUFACTURERS = [
   {
     name: "JLCPCB",
     priced: true,
     site: "jlcpcb.com",
     url: "https://cart.jlcpcb.com/quote",
-    summary: "Makes bare boards, and assembles them with parts from its own library.",
-    steps: [
-      "Upload the Gerbers zip to get a price for the board.",
-      "To have the parts soldered on, switch on PCB Assembly, then upload the bill of materials and the pick and place file where it asks for the BOM and the CPL.",
-    ],
+    takes:
+      "Takes the Gerbers. For assembly, add the bill of materials and the pick and place file.",
   },
   {
     name: "CircuitHub",
     priced: false,
     site: "circuithub.com",
     url: "https://circuithub.com/",
-    summary: "Assembles boards from the design files. It does not take Gerbers.",
-    steps: [
-      "Unzip the KiCad project.",
-      "Create a project on CircuitHub and upload the three KiCad files to get a price.",
-    ],
+    takes: "Takes the KiCad project, not Gerbers.",
   },
 ] as const;
 
@@ -125,7 +123,7 @@ export default function OrderPanel(props: {
         : expectedBuild(entryFile, project.hashedFiles),
   });
 
-  if (!cwd || project === null || candidates.length === 0) {
+  if (!cwd || project === null || (candidates.length === 0 && entryFile === null)) {
     return (
       <div className="relative flex min-h-0 flex-1 flex-col bg-background" data-order-panel>
         <Cover>
@@ -174,7 +172,7 @@ export default function OrderPanel(props: {
       }
       projectName={orderProjectName(entryFile, cwd)}
       truncated={project.truncated}
-      onChangeFile={candidates.length > 1 ? () => setChoosing(true) : null}
+      onChangeFile={candidates.some((path) => path !== entryFile) ? () => setChoosing(true) : null}
       onRetry={() => setViewerAttempt((attempt) => attempt + 1)}
     />
   );
@@ -275,6 +273,8 @@ function OrderPage(props: {
     dispatch,
   });
   const [making, setMaking] = useState<OrderFile["kind"] | null>(null);
+  const [showingPrice, setShowingPrice] = useState(false);
+  const priceDetailsId = useId();
   const [quoted, setQuoted] = useState<{
     readonly file: string;
     readonly run: number;
@@ -368,20 +368,14 @@ function OrderPage(props: {
         className="pointer-events-none invisible absolute inset-0 size-full border-0"
       />
       <div className="scrollbar-gutter-both relative min-h-0 flex-1 overflow-y-auto">
-        <div className="mx-auto flex max-w-2xl flex-col gap-6 px-5 py-6">
-          <header className="flex flex-col gap-1.5">
-            <div className="flex items-center gap-3">
-              <h2 className="min-w-0 flex-1 truncate font-semibold text-lg">Order {entryFile}</h2>
-              {props.onChangeFile === null ? null : (
-                <Button size="xs" variant="outline" onClick={props.onChangeFile}>
-                  Change
-                </Button>
-              )}
-            </div>
-            <p className="text-muted-foreground text-sm">
-              Download the files a manufacturer needs, then upload them where you order. They are
-              made from the design as it is now.
-            </p>
+        <div className="mx-auto flex max-w-2xl flex-col gap-4 px-5 py-6">
+          <header className="flex items-center gap-3">
+            <h2 className="min-w-0 flex-1 truncate font-semibold text-lg">Order {entryFile}</h2>
+            {props.onChangeFile === null ? null : (
+              <Button size="xs" variant="outline" onClick={props.onChangeFile}>
+                Change
+              </Button>
+            )}
           </header>
 
           {readiness.status === "preparing" ? (
@@ -424,33 +418,40 @@ function OrderPage(props: {
             </Alert>
           ) : null}
 
-          <section className="flex flex-col gap-2" aria-label="Files">
-            <h3 className="font-medium text-sm">Files</h3>
-            <ul className="divide-y rounded-xl border">
+          <div className="flex flex-col gap-2">
+            <ul aria-label="Files" className="divide-y overflow-hidden rounded-xl border">
               {ORDER_FILES.map((file) => {
                 const unavailable = needsMet !== null && !needsMet.has(file.needs);
+                const blocked = needsMet === null || unavailable || making !== null;
                 return (
-                  <li key={file.kind} className="flex items-center gap-3 px-3.5 py-3">
-                    <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-                      <div className="flex min-w-0 items-baseline gap-2">
-                        <span className="shrink-0 font-medium text-sm">{file.label}</span>
-                        <span className="truncate font-mono text-muted-foreground text-xs">
+                  <li key={file.kind}>
+                    <Tooltip>
+                      <TooltipTrigger
+                        render={
+                          <button
+                            type="button"
+                            aria-disabled={blocked}
+                            className={ROW_CLASS_NAME}
+                            onClick={blocked ? undefined : () => void download(file)}
+                          />
+                        }
+                      >
+                        <span className="min-w-0 flex-1 truncate font-medium text-sm">
+                          {file.label}
+                        </span>
+                        {making === file.kind ? (
+                          <Spinner className="size-4" />
+                        ) : (
+                          <DownloadIcon aria-hidden className="size-4 text-muted-foreground" />
+                        )}
+                      </TooltipTrigger>
+                      <TooltipPopup side="bottom" align="start">
+                        <span className="block font-mono text-muted-foreground">
                           {orderFileName(file, projectName)}
                         </span>
-                      </div>
-                      <p className="text-muted-foreground text-xs">
                         {unavailable ? WHY_UNAVAILABLE[file.needs] : file.description}
-                      </p>
-                    </div>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      disabled={needsMet === null || unavailable || making !== null}
-                      onClick={() => void download(file)}
-                    >
-                      {making === file.kind ? <Spinner /> : <DownloadIcon />}
-                      Download
-                    </Button>
+                      </TooltipPopup>
+                    </Tooltip>
                   </li>
                 );
               })}
@@ -461,43 +462,105 @@ function OrderPage(props: {
                 design in the Circuit tab first.
               </p>
             ) : null}
-          </section>
+          </div>
 
-          <section className="flex flex-col gap-2" aria-label="Where to order">
-            <h3 className="font-medium text-sm">Where to order</h3>
-            {MANUFACTURERS.map((manufacturer) => (
-              <article
-                key={manufacturer.name}
-                className="flex flex-col gap-2 rounded-xl border p-3.5"
-              >
-                <div className="flex items-center gap-2">
-                  <h4 className="min-w-0 flex-1 font-medium text-sm">{manufacturer.name}</h4>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    render={<a href={manufacturer.url} target="_blank" rel="noopener noreferrer" />}
-                  >
-                    {manufacturer.site}
-                    <ExternalLinkIcon aria-hidden />
-                  </Button>
-                  {manufacturer.priced && quotable ? <JlcpcbPrice outcome={outcome} /> : null}
-                </div>
-                <p className="text-muted-foreground text-sm">{manufacturer.summary}</p>
-                <ol className="flex list-decimal flex-col gap-1 pl-5 text-sm">
-                  {manufacturer.steps.map((step) => (
-                    <li key={step}>{step}</li>
-                  ))}
-                </ol>
-              </article>
-            ))}
-          </section>
+          <ul aria-label="Where to order" className="divide-y overflow-hidden rounded-xl border">
+            {MANUFACTURERS.map((manufacturer) =>
+              manufacturer.priced && quotable ? (
+                <li key={manufacturer.name}>
+                  <div className="flex items-center">
+                    <Tooltip>
+                      <TooltipTrigger
+                        render={
+                          <button
+                            type="button"
+                            aria-expanded={showingPrice}
+                            aria-controls={priceDetailsId}
+                            className={cn(ROW_CLASS_NAME, "min-w-0 flex-1 pr-1")}
+                            onClick={() => setShowingPrice((showing) => !showing)}
+                          />
+                        }
+                      >
+                        <span className="min-w-0 flex-1 truncate font-medium text-sm">
+                          {manufacturer.name}
+                        </span>
+                        <JlcpcbPrice outcome={outcome} />
+                        <ChevronDownIcon
+                          aria-hidden
+                          className={cn(
+                            "size-4 text-muted-foreground",
+                            showingPrice && "rotate-180",
+                          )}
+                        />
+                      </TooltipTrigger>
+                      {/* Above the row once the details are open, so it never covers them. */}
+                      <TooltipPopup side={showingPrice ? "top" : "bottom"} align="start">
+                        {manufacturer.takes}
+                      </TooltipPopup>
+                    </Tooltip>
+                    <Tooltip>
+                      <TooltipTrigger
+                        render={
+                          <a
+                            href={manufacturer.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            aria-label={`Open ${manufacturer.site}`}
+                            className="flex items-center self-stretch pr-3.5 pl-2.5 text-muted-foreground outline-none hover:bg-accent/50 hover:text-foreground focus-visible:bg-accent/50 focus-visible:text-foreground"
+                          />
+                        }
+                      >
+                        <ExternalLinkIcon aria-hidden className="size-4" />
+                      </TooltipTrigger>
+                      <TooltipPopup side="bottom" align="end">
+                        <span className="font-mono">{manufacturer.site}</span>
+                      </TooltipPopup>
+                    </Tooltip>
+                  </div>
+                  {showingPrice ? (
+                    <div id={priceDetailsId} className="border-t px-3.5 py-3 text-xs">
+                      <JlcpcbPriceDetails outcome={outcome} />
+                    </div>
+                  ) : null}
+                </li>
+              ) : (
+                <li
+                  key={manufacturer.name}
+                  className="relative flex items-center gap-3 pr-3.5 hover:bg-accent/50 has-[a:focus-visible]:bg-accent/50"
+                >
+                  <Tooltip>
+                    <TooltipTrigger
+                      render={
+                        // The link is stretched over its row, so the whole row opens the site.
+                        <a
+                          href={manufacturer.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="min-w-0 flex-1 truncate py-2.5 pl-3.5 font-medium text-sm outline-none after:absolute after:inset-0"
+                        />
+                      }
+                    >
+                      {manufacturer.name}
+                    </TooltipTrigger>
+                    <TooltipPopup side="bottom" align="start">
+                      <span className="block font-mono text-muted-foreground">
+                        {manufacturer.site}
+                      </span>
+                      {manufacturer.takes}
+                    </TooltipPopup>
+                  </Tooltip>
+                  <ExternalLinkIcon aria-hidden className="size-4 text-muted-foreground" />
+                </li>
+              ),
+            )}
+          </ul>
         </div>
       </div>
     </div>
   );
 }
 
-/** JLCPCB's price for its smallest order, beside the link. Hovering it shows what the price is made of. */
+/** JLCPCB's price for its smallest order, in its row. */
 function JlcpcbPrice(props: { readonly outcome: EstimateOutcome | null }) {
   const { outcome } = props;
   if (outcome === null) {
@@ -509,71 +572,64 @@ function JlcpcbPrice(props: { readonly outcome: EstimateOutcome | null }) {
     );
   }
   if (outcome.status === "failed") {
+    return <span className="text-muted-foreground text-xs">no estimate</span>;
+  }
+  return (
+    <span className="text-sm tabular-nums">
+      {formatEstimateTotal(outcome.estimate)}
+      {outcome.estimate.unpricedDesignators.length > 0 ? "+" : ""}
+    </span>
+  );
+}
+
+/** What JLCPCB's price is made of, shown under its row when the row is clicked. */
+function JlcpcbPriceDetails(props: { readonly outcome: EstimateOutcome | null }) {
+  const { outcome } = props;
+  if (outcome === null) {
+    return <p className="text-muted-foreground">Still estimating.</p>;
+  }
+  if (outcome.status === "failed") {
     return (
-      <Tooltip>
-        <TooltipTrigger
-          render={<span tabIndex={0} className="cursor-help text-muted-foreground text-xs" />}
-        >
-          (no estimate)
-        </TooltipTrigger>
-        <TooltipPopup side="bottom" align="end">
-          JLCPCB's price could not be estimated: {outcome.message}
-        </TooltipPopup>
-      </Tooltip>
+      <p className="wrap-anywhere text-muted-foreground">
+        JLCPCB's price could not be estimated: {outcome.message}
+      </p>
     );
   }
   const { estimate } = outcome;
   const unpriced = estimate.unpricedDesignators;
   return (
-    <Tooltip>
-      <TooltipTrigger
-        render={
-          <span
-            tabIndex={0}
-            className="cursor-help text-sm tabular-nums underline decoration-dotted underline-offset-4"
-          />
-        }
-      >
-        ({formatEstimateTotal(estimate)}
-        {unpriced.length > 0 ? "+" : ""})
-      </TooltipTrigger>
-      <TooltipPopup side="bottom" align="end" className="max-w-96">
-        <div className="flex flex-col gap-2 py-1 text-left">
-          <p className="font-medium">
-            Estimate for JLCPCB's smallest order: {describeEstimateOrder(estimate)}
-          </p>
-          <dl className="grid grid-cols-[1fr_auto] gap-x-4 gap-y-1">
-            {estimate.rows.map((row) => (
-              <Fragment key={row.label}>
-                <dt>
-                  {row.label}
-                  {row.note === null ? null : (
-                    <span className="block text-muted-foreground">{row.note}</span>
-                  )}
-                </dt>
-                <dd className="text-right tabular-nums">{formatUsd(row.total)}</dd>
-              </Fragment>
-            ))}
-            <dt className="border-t pt-1 font-medium">Total</dt>
-            <dd className="border-t pt-1 text-right font-medium tabular-nums">
-              {formatUsd(estimate.total)}
-            </dd>
-          </dl>
-          {estimate.lowTotal === estimate.highTotal ? null : (
-            <p className="text-muted-foreground">
-              Likely between {formatUsd(estimate.lowTotal)} and {formatUsd(estimate.highTotal)}.
-            </p>
-          )}
-          {unpriced.length === 0 ? null : (
-            <p>
-              Not in the price, because no JLCPCB part was found for them: {unpriced.join(", ")}.
-            </p>
-          )}
-          {estimate.destinationNote === null ? null : (
-            <p className="text-muted-foreground">{estimate.destinationNote}</p>
-          )}
-        </div>
-      </TooltipPopup>
-    </Tooltip>
+    <div className="flex flex-col gap-2">
+      <p className="text-muted-foreground">
+        JLCPCB's smallest order: {describeEstimateOrder(estimate)}
+      </p>
+      <dl className="grid grid-cols-[1fr_auto] gap-x-4 gap-y-1">
+        {estimate.rows.map((row) => (
+          <Fragment key={row.label}>
+            <dt>
+              {row.label}
+              {row.note === null ? null : (
+                <span className="block text-muted-foreground">{row.note}</span>
+              )}
+            </dt>
+            <dd className="text-right tabular-nums">{formatUsd(row.total)}</dd>
+          </Fragment>
+        ))}
+        <dt className="border-t pt-1 font-medium">Total</dt>
+        <dd className="border-t pt-1 text-right font-medium tabular-nums">
+          {formatUsd(estimate.total)}
+        </dd>
+      </dl>
+      {estimate.lowTotal === estimate.highTotal ? null : (
+        <p className="text-muted-foreground">
+          Likely between {formatUsd(estimate.lowTotal)} and {formatUsd(estimate.highTotal)}.
+        </p>
+      )}
+      {unpriced.length === 0 ? null : (
+        <p>Not in the price, because no JLCPCB part was found for them: {unpriced.join(", ")}.</p>
+      )}
+      {estimate.destinationNote === null ? null : (
+        <p className="text-muted-foreground">{estimate.destinationNote}</p>
+      )}
+    </div>
   );
 }

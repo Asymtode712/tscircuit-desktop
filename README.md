@@ -135,7 +135,7 @@ The Mac app is signed with tscircuit's Apple Developer ID and notarized by Apple
 
 Windows releases use the same Azure Artifact Signing profile as [tscircuit-standalone](https://github.com/tscircuit/tscircuit-standalone/blob/main/.github/workflows/sign-windows.yml). The `windows-signing` GitHub environment is restricted to `main`. Its six `AZURE_*` variables configure GitHub OIDC login and the certificate profile. The Windows job installs the package and checks the timestamped Authenticode signatures before the release is published. Windows pull requests build unsigned installers for testing.
 
-**The app updates itself** from this repository's releases. Each release carries the files the updater reads, `latest-mac.yml` and `latest.yml`; the release workflow writes the Mac one again after signing, since signing changes the zip. Pull request builds never update themselves. Copies installed before this was turned on say updates are unavailable, and need one newer release installed by hand.
+**The app updates itself** from this repository's releases. Each release carries the files the updater reads, `latest-mac.yml`, `latest.yml` and `latest-linux.yml`; the release workflow writes the Mac one again after signing, since signing changes the zip. Pull request builds never update themselves. Copies installed before this was turned on say updates are unavailable, and need one newer release installed by hand.
 
 ## Beside T3 Code
 
@@ -159,7 +159,6 @@ Still shared, or not yet separate:
 
 - **The agents' own data.** Claude Code, Codex and the others keep their sign-in and history in their own folders, whichever app starts them.
 - **Per-branch git settings.** Both apps record a branch's base and pull request under the same `branch.<name>.t3-…` keys in a repository's git config.
-- **Linux package names.** A Linux package would still install a binary named `t3code`. No such package is built yet; this has to change before one is.
 - **Remote machines.** Connecting to another computer over SSH installs T3's server there, which uses T3 Code's names on that machine.
 
 ## Privacy
@@ -176,7 +175,7 @@ This list covers what was checked while building the rename. It is not a full au
 ## Known gaps
 
 - **Some T3 names remain on purpose.** T3 Connect and T3 Chat keep their names because they are T3's own services, agents still see the app's tools under the name `t3-code`, and `npx t3` in the app's text means T3's package on npm. See "Beside T3 Code" for what is separate.
-- **Apple Silicon and Windows x64 only.** The Windows installer ships the native runtime without the optional WSL runtime archive.
+- **Apple Silicon, Windows x64 and Linux x64 only.** The Windows installer ships the native runtime without the optional WSL runtime archive.
 - **The bundled skill is only as new as the build.** It is refreshed when a release is built, not while the app runs.
 - **"Report a problem" still files to T3 Code.** The built-in triage agent is written to search and open issues in T3 Code's repository. It needs rewriting for this repository before the app is given to users.
 - **The server's own updater still looks at T3 Code's releases.** It applies to servers started with `tscircuit-desktop` from a terminal, not to the desktop app.

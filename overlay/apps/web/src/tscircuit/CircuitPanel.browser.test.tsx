@@ -1,3 +1,7 @@
+import type { ComponentProps } from "react";
+import { scopedThreadKey } from "@t3tools/client-runtime/environment";
+import { useRightPanelStore } from "~/rightPanelStore";
+import { CircuitSplitControl } from "./CircuitSplitControl";
 import type { EnvironmentId, ScopedThreadRef } from "@t3tools/contracts";
 import { expect, it, vi } from "vite-plus/test";
 import { act, render } from "../../test/render";
@@ -31,6 +35,21 @@ vi.mock(import("./orderActions"), async (importOriginal) => ({
 
 import CircuitPanel from "./CircuitPanel";
 
+function Harness(props: ComponentProps<typeof CircuitPanel>) {
+  const split = useRightPanelStore(
+    (state) =>
+      state.byThreadKey[scopedThreadKey(props.threadRef)]?.surfaces.some(
+        (surface) => surface.kind === "circuit" && surface.split === true,
+      ) ?? false,
+  );
+  return (
+    <>
+      <CircuitSplitControl threadRef={props.threadRef} split={split} />
+      <CircuitPanel {...props} split={split} />
+    </>
+  );
+}
+
 function send(frame: HTMLIFrameElement, data: unknown) {
   window.dispatchEvent(new MessageEvent("message", { source: frame.contentWindow, data }));
 }
@@ -60,20 +79,21 @@ it("stacks at most two panes, isolates navigation/errors, and closes with focus 
     composerDraftTarget: {} as ComposerThreadTarget,
     threadRef: { environmentId: "test", threadId: "thread" } as ScopedThreadRef,
   };
+  useRightPanelStore.getState().open(props.threadRef, "circuit");
   // This isolated circuit panel has no route-dependent behavior.
-  await using screen = await render(<CircuitPanel {...props} />, { router: false });
+  await using screen = await render(<Harness {...props} />, { router: false });
   await expect
-    .element(screen.getByRole("button", { name: "Split view", exact: true }))
+    .element(screen.getByRole("button", { name: "Split circuit view", exact: true }))
     .toBeVisible();
   await vi.waitFor(() => expect(document.querySelectorAll("iframe")).toHaveLength(1));
   const topFrame = document.querySelector("iframe")!;
   await act(() => ready(topFrame));
   await act(() => rendered(topFrame));
-  await screen.getByRole("button", { name: "Split view", exact: true }).click();
+  await screen.getByRole("button", { name: "Split circuit view", exact: true }).click();
   await vi.waitFor(() => expect(document.querySelectorAll("iframe")).toHaveLength(2));
   await expect
-    .element(screen.getByRole("button", { name: "Split view", exact: true }))
-    .toBeDisabled();
+    .element(screen.getByRole("button", { name: "Close split circuit view", exact: true }))
+    .toHaveAttribute("aria-pressed", "true");
   const panel = document.querySelector("[data-circuit-panel]")!;
   expect(panel.classList.contains("flex-col")).toBe(true);
   expect(panel.classList.contains("divide-y")).toBe(true);
@@ -124,9 +144,9 @@ it("stacks at most two panes, isolates navigation/errors, and closes with focus 
     expect(bottom.textContent).toContain("1 error");
     expect(top.textContent).not.toContain("1 error");
   });
-  await screen.rerender(<CircuitPanel {...props} cwd={undefined} />);
-  await screen.getByRole("button", { name: "Close split view", exact: true }).click();
+  await screen.rerender(<Harness {...props} cwd={undefined} />);
+  await screen.getByRole("button", { name: "Close split circuit view", exact: true }).click();
   expect(document.querySelectorAll("iframe")).toHaveLength(1);
   expect(document.querySelector("iframe")).toBe(topFrame);
-  expect(document.activeElement?.textContent).toBe("Split view");
+  expect(document.activeElement?.getAttribute("aria-label")).toBe("Split circuit view");
 });

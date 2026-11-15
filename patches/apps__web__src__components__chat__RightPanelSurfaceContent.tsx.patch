@@ -1,7 +1,7 @@
 Renders the content of the Circuit and Order tabs (CircuitPanel.tsx and OrderPanel.tsx in apps/web/src/tscircuit/, loaded lazily). The Circuit tab gets the thread's composer target so its "Add to prompt" can write to the prompt. Both get the thread: the Circuit tab opens the Order tab in its panel, and the Order tab keeps its choice of file there.
 
 diff --git a/apps/web/src/components/chat/RightPanelSurfaceContent.tsx b/apps/web/src/components/chat/RightPanelSurfaceContent.tsx
-index 358be56d994f24b11a0aea722830db5881877deb..acbb3d54e18a831e9e701607bc88a25abebf6de2 100644
+index 358be56d994f24b11a0aea722830db5881877deb..c1439f403bc5a95cbd619c8972565156595f8e84 100644
 --- a/apps/web/src/components/chat/RightPanelSurfaceContent.tsx
 +++ b/apps/web/src/components/chat/RightPanelSurfaceContent.tsx
 @@ -33,6 +33,8 @@ const DevicePanel = lazy(() =>
@@ -13,7 +13,7 @@ index 358be56d994f24b11a0aea722830db5881877deb..acbb3d54e18a831e9e701607bc88a25a
  
  type RightPanelTerminalProps = Omit<
    PersistentThreadTerminalPanelProps,
-@@ -200,6 +202,34 @@ export function RightPanelSurfaceContent(props: {
+@@ -200,6 +202,35 @@ export function RightPanelSurfaceContent(props: {
            />
          </Suspense>
        );
@@ -29,6 +29,7 @@ index 358be56d994f24b11a0aea722830db5881877deb..acbb3d54e18a831e9e701607bc88a25a
 +            workspaceMutationId={props.workspaceMutationId}
 +            composerDraftTarget={props.composerDraftTarget}
 +            threadRef={threadRef}
++            split={surface.split === true}
 +          />
 +        </Suspense>
 +      );

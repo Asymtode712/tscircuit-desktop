@@ -6,6 +6,8 @@ export interface CircuitSurface {
   kind: "circuit";
   /** Workspace-relative file to render. Unset renders the project's entry file. */
   relativePath?: string;
+  /** One optional comparison pane below the primary circuit view. */
+  split?: boolean;
 }
 
 export const circuitSurface = (relativePath?: string): CircuitSurface =>
