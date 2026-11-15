@@ -99,7 +99,8 @@ it("stacks at most two panes, isolates navigation/errors, and closes with focus 
   expect(panel.classList.contains("divide-y")).toBe(true);
   expect(panel.children[0]?.getAttribute("aria-label")).toBe("Primary circuit view");
   expect(panel.children[1]?.getAttribute("aria-label")).toBe("Secondary circuit view");
-  await screen.getByRole("button", { name: "Order", exact: true }).nth(1).click();
+  expect(document.querySelectorAll('button[aria-label="Order"]')).toHaveLength(1);
+  await screen.getByRole("button", { name: "Order", exact: true }).click();
   expect(openOrderPane).toHaveBeenCalledWith(props.threadRef);
   const bottomFrame = document.querySelectorAll("iframe")[1]!;
   await act(() => ready(bottomFrame));

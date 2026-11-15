@@ -337,6 +337,7 @@ export default function CircuitPanel(props: {
             : viewerFiles
         }
         reportOwner
+        showOrder
         reporting={reporting}
         cwd={cwd}
         failed={projectState.status === "failed"}
@@ -353,6 +354,7 @@ export default function CircuitPanel(props: {
           entryFile={entryFile}
           viewerFiles={viewerFiles}
           reportOwner={false}
+          showOrder={false}
           reporting={false}
           cwd={cwd}
           failed={projectState.status === "failed"}
@@ -380,6 +382,7 @@ interface CircuitPaneProps {
   readonly persistPreference: boolean;
   readonly label: string;
   readonly reportOwner: boolean;
+  readonly showOrder: boolean;
   readonly reporting: boolean;
 }
 
@@ -462,7 +465,7 @@ function CircuitPane(props: CircuitPaneProps) {
         errorCount={countErrors(view.counts) + (view.executionError === null ? 0 : 1)}
         running={view.running}
         onPick={pickScreen}
-        onOrder={() => openOrderPane(props.threadRef)}
+        onOrder={props.showOrder ? () => openOrderPane(props.threadRef) : undefined}
       />
       <div className="relative flex min-h-0 flex-1 flex-col">
         <CircuitViewer
@@ -563,7 +566,7 @@ function CircuitViewTabs(props: {
   readonly errorCount: number;
   readonly running: boolean;
   readonly onPick: (screen: CircuitScreen) => void;
-  readonly onOrder: () => void;
+  readonly onOrder: (() => void) | undefined;
 }) {
   const availableRow = useRef<HTMLDivElement>(null);
   const measuringRow = useRef<HTMLDivElement>(null);
@@ -710,16 +713,20 @@ function CircuitViewTabs(props: {
       </div>
       <div className="flex shrink-0 items-center gap-2">
         {props.running ? <Spinner className="size-3.5" /> : null}
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <Button size="icon-xs" variant="outline" aria-label="Order" onClick={props.onOrder}>
-                <ShoppingCart />
-              </Button>
-            }
-          />
-          <TooltipPopup side="bottom">Order this board</TooltipPopup>
-        </Tooltip>
+        {props.onOrder ? (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button size="icon-xs" variant="outline" aria-label="Order" onClick={props.onOrder}>
+                  <ShoppingCart />
+                </Button>
+              }
+            />
+            <TooltipPopup side="bottom">Order this board</TooltipPopup>
+          </Tooltip>
+        ) : (
+          <span aria-hidden className="size-7 shrink-0 sm:size-6" />
+        )}
       </div>
     </div>
   );

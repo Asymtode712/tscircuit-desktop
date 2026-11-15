@@ -1,6 +1,6 @@
 import { scopedThreadKey } from "@t3tools/client-runtime/environment";
 import type { ScopedThreadRef } from "@t3tools/contracts";
-import { Rows2Icon } from "lucide-react";
+import { SquareSplitVertical } from "lucide-react";
 
 import { Toggle } from "~/components/ui/toggle";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
@@ -41,7 +41,7 @@ export function CircuitSplitControl(props: {
             variant="ghost"
             size="sm"
           >
-            <Rows2Icon className="size-4" />
+            <SquareSplitVertical className="size-4" />
           </Toggle>
         }
       />
