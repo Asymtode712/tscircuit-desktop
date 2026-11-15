@@ -1,0 +1,39 @@
+Software centers read this file from the .deb. Point it at this app's launcher, icon and program (`tscircuit-desktop-app`), and at tscircuit and this repository in place of T3 Tools and T3 Code's.
+
+diff --git a/apps/desktop/resources/linux/com.tscircuit.desktop.metainfo.xml b/apps/desktop/resources/linux/com.tscircuit.desktop.metainfo.xml
+index 50a49834b48ba83caa31000e8940c09f81c4469e..9726cd4f4451ecaef94fcdac3eacf52e968272fd 100644
+--- a/apps/desktop/resources/linux/com.tscircuit.desktop.metainfo.xml
++++ b/apps/desktop/resources/linux/com.tscircuit.desktop.metainfo.xml
+@@ -5,8 +5,8 @@
+   <project_license>MIT</project_license>
+   <name>tscircuit desktop</name>
+   <summary>Desktop GUI for coding agents</summary>
+-  <developer id="com.t3tools">
+-    <name>T3 Tools Inc.</name>
++  <developer id="com.tscircuit">
++    <name>tscircuit Inc.</name>
+   </developer>
+   <description>
+     <p>
+@@ -18,15 +18,15 @@
+       Connect from desktop, web, or mobile to continue working remotely.
+     </p>
+   </description>
+-  <launchable type="desktop-id">t3code.desktop</launchable>
+-  <icon type="stock">t3code</icon>
++  <launchable type="desktop-id">tscircuit-desktop-app.desktop</launchable>
++  <icon type="stock">tscircuit-desktop-app</icon>
+   <provides>
+-    <binary>t3code</binary>
++    <binary>tscircuit-desktop-app</binary>
+   </provides>
+   <categories>
+     <category>Development</category>
+   </categories>
+-  <url type="homepage">https://t3.codes</url>
+-  <url type="bugtracker">https://github.com/pingdotgg/t3code/issues</url>
+-  <url type="vcs-browser">https://github.com/pingdotgg/t3code</url>
++  <url type="homepage">https://tscircuit.com/desktop</url>
++  <url type="bugtracker">https://github.com/tscircuit/tscircuit-desktop/issues</url>
++  <url type="vcs-browser">https://github.com/tscircuit/tscircuit-desktop</url>
+ </component>

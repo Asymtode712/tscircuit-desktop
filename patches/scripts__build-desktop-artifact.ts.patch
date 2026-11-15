@@ -1,9 +1,10 @@
 Use standalone’s Azure Artifact Signing hook on Windows so Electron Builder signs and verifies the app, native binaries, installer, and uninstaller as it packages them.
 Allow up to 100 Windows payload files. The desktop x64 build currently ships 90.
 Run tscircuit-after-pack.cjs after packing: it does what T3 Code's own hook does, then gives the updater a download folder of its own, so this app and T3 Code do not clear each other's pending updates.
+Give the Linux packages names of their own, so the .deb neither replaces T3 Code's `t3code` package nor shares its `/usr/bin/t3code`, docs folder or update downloads: the package is `tscircuit-desktop`, maintained by tscircuit, and the program is `tscircuit-desktop-app`, because `tscircuit-desktop` is the command-line tool the app links for itself. The packaged name only changes on Linux; on Windows it decides where existing copies are installed.
 
 diff --git a/scripts/build-desktop-artifact.ts b/scripts/build-desktop-artifact.ts
-index 6668d46544bbe17d235b312b99f28aa8cd11bc48..78071b0f6c772180141b9f28c4a7875da3a629f1 100644
+index 6668d46544bbe17d235b312b99f28aa8cd11bc48..79a731b10e45f6932380817c6d2b5e54db1cf446 100644
 --- a/scripts/build-desktop-artifact.ts
 +++ b/scripts/build-desktop-artifact.ts
 @@ -1061,7 +1061,7 @@ export function resolveWindowsServerAsarIgnoreGlobs(arch: typeof BuildArch.Type)
@@ -26,6 +27,29 @@ index 6668d46544bbe17d235b312b99f28aa8cd11bc48..78071b0f6c772180141b9f28c4a7875d
      appId: DESKTOP_APP_ID,
      productName: resolveDesktopProductName(version),
      artifactName: "tscircuit-desktop-${version}-${arch}.${ext}",
+@@ -2908,11 +2910,11 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
+     buildConfig.afterPack = path.join(repoRoot, "scripts/linux-after-pack.ts");
+     buildConfig.linux = {
+       target: target === "AppImage" ? [target, "deb"] : [target],
+-      executableName: "t3code",
++      executableName: "tscircuit-desktop-app",
+       icon: "icons",
+       category: "Development",
+       synopsis: "Desktop GUI for coding agents",
+-      maintainer: "T3 Tools <hello@t3.codes>",
++      maintainer: "tscircuit <contact@tscircuit.com>",
+       protocols: [
+         {
+           name: "tscircuit desktop",
+@@ -2930,7 +2932,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
+       // FPM runs outside the staged app directory, so source paths must be absolute.
+       fpm: [
+         `${path.join(repoRoot, "apps/desktop/resources/linux/com.tscircuit.desktop.metainfo.xml")}=/usr/share/metainfo/com.tscircuit.desktop.metainfo.xml`,
+-        `${path.join(repoRoot, "LICENSE")}=/usr/share/doc/t3code/copyright`,
++        `${path.join(repoRoot, "LICENSE")}=/usr/share/doc/tscircuit-desktop/copyright`,
+       ],
+       // Debian 13 and Ubuntu 24.04 use 64-bit-time names; retain old-name fallbacks.
+       depends: [
 @@ -2964,7 +2966,13 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
        signAndEditExecutable: true,
      };
@@ -41,3 +65,12 @@ index 6668d46544bbe17d235b312b99f28aa8cd11bc48..78071b0f6c772180141b9f28c4a7875d
      } else if (signed) {
        const path = yield* Path.Path;
        const { publisherName } = yield* AzureTrustedSigningOptionsConfig;
+@@ -3898,7 +3906,7 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
+       ? path.join(stageAppDir, WINDOWS_SERVER_RESOURCE_SOURCE_DIR, WINDOWS_SERVER_ASAR_RESOURCE)
+       : undefined;
+   const stagePackageJson: StagePackageJson = {
+-    name: "t3code",
++    name: options.platform === "linux" ? "tscircuit-desktop" : "t3code",
+     version: appVersion,
+     buildVersion: appVersion,
+     t3codeCommitHash: commitHash,
