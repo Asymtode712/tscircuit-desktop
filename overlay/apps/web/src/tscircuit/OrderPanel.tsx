@@ -123,7 +123,7 @@ export default function OrderPanel(props: {
         : expectedBuild(entryFile, project.hashedFiles),
   });
 
-  if (!cwd || project === null || candidates.length === 0) {
+  if (!cwd || project === null || (candidates.length === 0 && entryFile === null)) {
     return (
       <div className="relative flex min-h-0 flex-1 flex-col bg-background" data-order-panel>
         <Cover>
@@ -172,7 +172,7 @@ export default function OrderPanel(props: {
       }
       projectName={orderProjectName(entryFile, cwd)}
       truncated={project.truncated}
-      onChangeFile={candidates.length > 1 ? () => setChoosing(true) : null}
+      onChangeFile={candidates.some((path) => path !== entryFile) ? () => setChoosing(true) : null}
       onRetry={() => setViewerAttempt((attempt) => attempt + 1)}
     />
   );

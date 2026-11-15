@@ -54,6 +54,29 @@ describe("pickFileToOrder", () => {
     expect(circuitFileCandidates({ "lib/math.ts": "" })).toEqual([]);
   });
 
+  it("leaves imported parts out of the files to pick from", () => {
+    const withImports = {
+      ...fsMap,
+      "imports/ESP32_S3_MINI_1_N8.tsx": "",
+      "packages/phone/imports/RT9013_33GB.tsx": "",
+      "lib/imports.tsx": "",
+    };
+    expect(circuitFileCandidates(withImports)).toEqual([
+      "index.tsx",
+      "boards/led.tsx",
+      "boards/motor.tsx",
+      "lib/imports.tsx",
+    ]);
+    expect(circuitFileCandidates({ "imports/ESP32_S3_MINI_1_N8.tsx": "" })).toEqual([]);
+  });
+
+  it("does not ask when the only other files are imported parts", () => {
+    const oneBoard = { "main-board.circuit.tsx": "", "imports/PAM8302AASCR.tsx": "" };
+    expect(pickFileToOrder({ fsMap: oneBoard, chosen: null, circuitTabFile: null })).toBe(
+      "main-board.circuit.tsx",
+    );
+  });
+
   it("orders the file chosen in the Order tab, over what the Circuit tab shows", () => {
     expect(
       pickFileToOrder({ fsMap, chosen: "boards/motor.tsx", circuitTabFile: "boards/led.tsx" }),
