@@ -1,13 +1,12 @@
 /**
- * Prints the version a build of the app is released as: the version of the
- * tscircuit package it bundles, so tscircuit desktop 0.0.3191 is the build with
- * tscircuit 0.0.3191 in it.
+ * Prints the number of the next release. See scripts/lib/release-version.ts.
  *
- * Usage: node scripts/release-version.ts
+ * Usage: node scripts/release-version.ts <patch|minor> < the tags of the releases so far, one a line
  */
+import { readFileSync } from "node:fs"
 import { fail } from "./lib/exec.ts"
-import { readViewerSource, resolveTscircuitVersion, viewerFile } from "./lib/viewer.ts"
+import { nextVersion } from "./lib/release-version.ts"
 
-const source = readViewerSource()
-if (!source) fail(`${viewerFile} is missing, so there is no tscircuit version to number a release after.`)
-console.log(resolveTscircuitVersion(source))
+const bump = process.argv[2] ?? "patch"
+if (bump !== "patch" && bump !== "minor") fail("Usage: release-version.ts <patch|minor> < release tags")
+console.log(nextVersion(readFileSync(0, "utf8").split("\n"), bump))

@@ -411,13 +411,13 @@ test("the viewer named in viewer.json is bundled from npm packages, and never ex
   assert.deepEqual([...Buffer.from(assets().manifoldWasmBase64, "base64")], [0, 97, 115, 109])
   assert.deepEqual(assets().versions, { tscircuit: "1.2.3", eval: "0.0.7", manifold: "3.5.1", jlcpcbQuote: "0.0.9" })
 
-  // A release is numbered after the tscircuit it bundles.
-  const releaseVersion = (env: NodeJS.ProcessEnv = {}) =>
-    spawnSync(process.execPath, [join(repo, "scripts", "release-version.ts")], {
+  // A release names the tscircuit it bundles, so it asks which one that is.
+  const tscircuitVersion = (env: NodeJS.ProcessEnv = {}) =>
+    spawnSync(process.execPath, [join(repo, "scripts", "tscircuit-version.ts")], {
       encoding: "utf8",
       env: { ...process.env, ...env },
     })
-  assert.equal(releaseVersion().stdout.trim(), "1.2.3")
+  assert.equal(tscircuitVersion().stdout.trim(), "1.2.3")
 
   // A price is not worth a failed build: without the lookup the viewer asks for the newest version itself.
   rmSync(quoteManifest)
@@ -440,11 +440,11 @@ test("the viewer named in viewer.json is bundled from npm packages, and never ex
   assert.notEqual(tooOld.status, 0)
   assert.match(tooOld.stderr, /cannot be used as the circuit viewer/)
 
-  // A release holds each of its builds to the version it is numbered after, whatever is newest by then.
+  // A release holds each of its builds to the version it names, whatever is newest by then.
   configure("latest")
   const held = { VIEWER_TSCIRCUIT_VERSION: "1.2.3" }
-  assert.equal(releaseVersion().stdout.trim(), "1.2.2")
-  assert.equal(releaseVersion(held).stdout.trim(), "1.2.3")
+  assert.equal(tscircuitVersion().stdout.trim(), "1.2.2")
+  assert.equal(tscircuitVersion(held).stdout.trim(), "1.2.3")
   const heldBuild = spawnSync(process.execPath, [join(repo, "scripts", "setup.ts"), "--no-install"], {
     encoding: "utf8",
     env: { ...process.env, ...held },

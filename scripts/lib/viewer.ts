@@ -55,7 +55,7 @@ export const viewerFile = join(repoRoot, "viewer.json")
 
 /**
  * Names the exact tscircuit version to bundle, over viewer.json's. A release sets it, so each
- * platform's build bundles the version the release is numbered after even if a newer one comes out
+ * platform's build bundles the version the release's title names even if a newer one comes out
  * while it builds.
  */
 export const TSCIRCUIT_VERSION_ENV = "VIEWER_TSCIRCUIT_VERSION"
@@ -83,18 +83,15 @@ interface PackageFiles {
   read: (path: string) => Buffer
 }
 
-/**
- * The tscircuit version a build made now would bundle, which is also the version the app is released as:
- * tscircuit desktop 0.0.3191 is the build with tscircuit 0.0.3191 in it.
- */
+/** The tscircuit version a build made now would bundle. */
 export function resolveTscircuitVersion(source: ViewerSource): string {
   const scratch = mkdtempSync(join(tmpdir(), "tscircuit-desktop-version-"))
   try {
     const metadataFile = join(scratch, "metadata.json")
     download(`${registryOf(source)}/tscircuit/${wantedTscircuit(source)}`, metadataFile)
     const version = (JSON.parse(readFileSync(metadataFile, "utf8")) as { version?: unknown }).version
-    if (typeof version !== "string" || !/^\d+\.\d+\.\d+$/.test(version)) {
-      fail(`tscircuit ${wantedTscircuit(source)} is version ${String(version)}, which the app cannot be released as: a release is numbered major.minor.patch.`)
+    if (typeof version !== "string" || !/^\d+\.\d+\.\d+[\w.-]*$/.test(version)) {
+      fail(`The registry did not say which version tscircuit ${wantedTscircuit(source)} is.`)
     }
     return version
   } finally {
