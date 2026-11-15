@@ -6,6 +6,10 @@ on:
       version:
         required: true
         type: string
+      # The tscircuit version the app bundles, which the release is numbered after.
+      tscircuit:
+        required: true
+        type: string
       sign:
         required: true
         type: boolean
@@ -16,6 +20,8 @@ jobs:
     runs-on: windows-2025
     timeout-minutes: 60
     environment: ${{ inputs.sign && 'windows-signing' || '' }}
+    env:
+      VIEWER_TSCIRCUIT_VERSION: ${{ inputs.tscircuit }}
     defaults:
       run:
         shell: pwsh

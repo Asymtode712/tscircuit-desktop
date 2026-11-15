@@ -2,9 +2,10 @@ name: Release
 
 # Builds tscircuit desktop for Apple Silicon Macs, Windows x64 and Linux x64.
 #
-#   - On every push to main it publishes a GitHub release, v<major>.<minor>.<run>.
-#     Major and minor come from "version" in package.json; the last number is
-#     this workflow's run number, so no commit is needed to bump it.
+#   - On every push to main it publishes a GitHub release numbered after the
+#     tscircuit package the app bundles: v0.0.3191 is the build with tscircuit
+#     0.0.3191 in it. A push while tscircuit has not moved on builds the same
+#     version again, and that build takes the place of the release before it.
 #   - On a pull request that changes the app or this file it only builds, and
 #     keeps the packages as workflow artifacts, so the build can be tried before
 #     merging.
@@ -55,6 +56,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
+      tscircuit: ${{ steps.version.outputs.tscircuit }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -64,19 +66,25 @@ jobs:
       - name: Choose the version
         id: version
         run: |
-          base="$(node -p "require('./package.json').version.split('.').slice(0, 2).join('.')")"
-          version="${base}.${GITHUB_RUN_NUMBER}"
+          # The newest tscircuit, which viewer.json asks for. Every build job
+          # below is held to it, so the number never names another version
+          # than the one inside.
+          tscircuit="$(node scripts/release-version.ts)"
+          version="$tscircuit"
           if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
             version="${version}-pr.${{ github.event.pull_request.number }}.${GITHUB_RUN_NUMBER}"
           fi
+          echo "tscircuit=$tscircuit" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "Version $version"
+          echo "Version $version, with tscircuit $tscircuit"
 
   mac:
     name: Apple Silicon
     runs-on: macos-15
     needs: version
     timeout-minutes: 90
+    env:
+      VIEWER_TSCIRCUIT_VERSION: ${{ needs.version.outputs.tscircuit }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -181,6 +189,8 @@ jobs:
     runs-on: ubuntu-24.04
     needs: version
     timeout-minutes: 60
+    env:
+      VIEWER_TSCIRCUIT_VERSION: ${{ needs.version.outputs.tscircuit }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -286,6 +296,7 @@ jobs:
     uses: ./.github/workflows/build-windows.yml
     with:
       version: ${{ needs.version.outputs.version }}
+      tscircuit: ${{ needs.version.outputs.tscircuit }}
       sign: false
 
   windows:
@@ -297,6 +308,7 @@ jobs:
     uses: ./.github/workflows/build-windows.yml
     with:
       version: ${{ needs.version.outputs.version }}
+      tscircuit: ${{ needs.version.outputs.tscircuit }}
       sign: true
 
   publish:
@@ -343,13 +355,22 @@ jobs:
 
           The Mac app is signed and notarized by Apple. The Windows installer is signed by tscircuit Inc through Azure Artifact Signing. The Linux packages are not signed.
 
-          The app updates itself from these releases. A copy that says updates are unavailable was installed before that worked: install a newer release by hand once.
+          The app updates itself from these releases. A copy numbered 0.1.x, or one that says updates are unavailable, does not: install a newer release by hand once.
           NOTES
           shopt -s nullglob
           files=(out/*.dmg out/*.zip out/*.exe out/*.AppImage out/*.deb out/*.yml out/*.blockmap)
+          # A push while tscircuit has not moved on builds the version that is
+          # already released. The newer build takes its place.
+          if gh release view "v$VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "v$VERSION is already released; replacing it with this build."
+            gh release delete "v$VERSION" --repo "$GITHUB_REPOSITORY" --cleanup-tag --yes
+          fi
+          # --latest: the 0.1.x releases from before the app took tscircuit's
+          # number sort above every release made here.
           gh release create "v$VERSION" "${files[@]}" \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
+            --latest \
             --title "tscircuit desktop $VERSION" \
             --notes-file "$RUNNER_TEMP/notes.md" \
             --generate-notes

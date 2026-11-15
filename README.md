@@ -129,13 +129,13 @@ When the app starts it copies the skill to `~/.agents/skills/tscircuit` (read by
 
 ## Releases and automatic updates
 
-Every push to `main` builds the app and publishes a GitHub release, `v<major>.<minor>.<run>`. Major and minor come from `"version"` in `package.json`; the last number is the release workflow's run number. Changes that only touch documentation do not release.
+Every push to `main` builds the app and publishes a GitHub release numbered after the `tscircuit` package the app bundles: `v0.0.3191` is the build with tscircuit 0.0.3191 in it. A push while tscircuit has not moved on builds the same version again, and that build replaces the release before it. Changes that only touch documentation do not release.
 
 The Mac app is signed with tscircuit's Apple Developer ID and notarized by Apple. T3 Code's packaging script only signs the Mac app when its own passkey sign-in is configured (a provisioning profile and a sign-in domain that tscircuit desktop does not use), so the release workflow signs the finished app itself, with `scripts/sign-macos.sh`.
 
 Windows releases use the same Azure Artifact Signing profile as [tscircuit-standalone](https://github.com/tscircuit/tscircuit-standalone/blob/main/.github/workflows/sign-windows.yml). The `windows-signing` GitHub environment is restricted to `main`. Its six `AZURE_*` variables configure GitHub OIDC login and the certificate profile. The Windows job installs the package and checks the timestamped Authenticode signatures before the release is published. Windows pull requests build unsigned installers for testing.
 
-**The app updates itself** from this repository's releases. Each release carries the files the updater reads, `latest-mac.yml`, `latest.yml` and `latest-linux.yml`; the release workflow writes the Mac one again after signing, since signing changes the zip. Pull request builds never update themselves. Copies installed before this was turned on say updates are unavailable, and need one newer release installed by hand.
+**The app updates itself** from this repository's releases. Each release carries the files the updater reads, `latest-mac.yml`, `latest.yml` and `latest-linux.yml`; the release workflow writes the Mac one again after signing, since signing changes the zip. Pull request builds never update themselves. Copies installed before this was turned on say updates are unavailable, and need one newer release installed by hand. So do copies numbered 0.1.x, from before releases took tscircuit's number: every release since is a lower number to them.
 
 ## Beside T3 Code
 
