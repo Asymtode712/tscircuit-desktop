@@ -1,7 +1,6 @@
 {
   "name": "tscircuit-desktop",
   "private": true,
-  "version": "0.1.0",
   "description": "Desktop app for designing electronics with tscircuit and AI, built on T3 Code",
   "license": "MIT",
   "type": "module",

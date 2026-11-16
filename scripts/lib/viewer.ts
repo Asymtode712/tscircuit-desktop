@@ -17,6 +17,7 @@
  */
 import { createHash } from "node:crypto"
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { fail, run, step, tryRun } from "./exec.ts"
 import { checkoutDir, repoRoot } from "./paths.ts"
@@ -52,6 +53,16 @@ const JLCPCB_QUOTE_PACKAGE = "@tscircuit/circuit-json-to-jlcpcb-quote"
 
 export const viewerFile = join(repoRoot, "viewer.json")
 
+/**
+ * Names the exact tscircuit version to bundle, over viewer.json's. A release sets it, so each
+ * platform's build bundles the version the release's title names even if a newer one comes out
+ * while it builds.
+ */
+export const TSCIRCUIT_VERSION_ENV = "VIEWER_TSCIRCUIT_VERSION"
+
+const registryOf = (source: ViewerSource) => (source.registry ?? DEFAULT_REGISTRY).replace(/\/+$/, "")
+const wantedTscircuit = (source: ViewerSource) => process.env[TSCIRCUIT_VERSION_ENV]?.trim() || source.tscircuit
+
 /** Null when this repo bundles no viewer (there is no viewer.json). */
 export const readViewerSource = (): ViewerSource | null =>
   existsSync(viewerFile) ? (JSON.parse(readFileSync(viewerFile, "utf8")) as ViewerSource) : null
@@ -70,6 +81,22 @@ function download(url: string, target: string): void {
 interface PackageFiles {
   version: string
   read: (path: string) => Buffer
+}
+
+/** The tscircuit version a build made now would bundle. */
+export function resolveTscircuitVersion(source: ViewerSource): string {
+  const scratch = mkdtempSync(join(tmpdir(), "tscircuit-desktop-version-"))
+  try {
+    const metadataFile = join(scratch, "metadata.json")
+    download(`${registryOf(source)}/tscircuit/${wantedTscircuit(source)}`, metadataFile)
+    const version = (JSON.parse(readFileSync(metadataFile, "utf8")) as { version?: unknown }).version
+    if (typeof version !== "string" || !/^\d+\.\d+\.\d+[\w.-]*$/.test(version)) {
+      fail(`The registry did not say which version tscircuit ${wantedTscircuit(source)} is.`)
+    }
+    return version
+  } finally {
+    rmSync(scratch, { recursive: true, force: true })
+  }
 }
 
 /** Downloads an npm package, checks it against the registry's hash, and unpacks it. */
@@ -155,12 +182,12 @@ function forwardSimulationPlotOption(bundle: string, version: string): string {
  */
 export function bundleViewer(source: ViewerSource): void {
   const resolved: Sources = {
-    registry: (source.registry ?? DEFAULT_REGISTRY).replace(/\/+$/, ""),
+    registry: registryOf(source),
     cacheDir: join(repoRoot, ".cache", "viewer"),
   }
   for (const file of VIEWER_FILES) excludeFromCheckoutGit(`${source.into}/${file}`)
 
-  const tscircuit = fetchPackage("tscircuit", source.tscircuit, resolved)
+  const tscircuit = fetchPackage("tscircuit", wantedTscircuit(source), resolved)
   const manifold = fetchPackage("manifold-3d", source.manifold, resolved)
   const runframe = tscircuit.read("dist/browser.min.js").toString("utf8")
 

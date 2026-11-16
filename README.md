@@ -129,7 +129,7 @@ When the app starts it copies the skill to `~/.agents/skills/tscircuit` (read by
 
 ## Releases and automatic updates
 
-Every push to `main` builds the app and publishes a GitHub release, `v<major>.<minor>.<run>`. Major and minor come from `"version"` in `package.json`; the last number is the release workflow's run number. Changes that only touch documentation do not release.
+Every push to `main` builds the app and publishes a GitHub release one patch number above the release before it: `v0.1.61`, then `v0.1.62`. The minor number never moves by itself: running the Release workflow by hand on `main` with `bump` set to `minor` publishes the first release of the next minor version, `v0.2.0`. Changes that only touch documentation do not release.
 
 The Mac app is signed with tscircuit's Apple Developer ID and notarized by Apple. T3 Code's packaging script only signs the Mac app when its own passkey sign-in is configured (a provisioning profile and a sign-in domain that tscircuit desktop does not use), so the release workflow signs the finished app itself, with `scripts/sign-macos.sh`.
 
