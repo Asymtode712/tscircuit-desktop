@@ -37,6 +37,7 @@ import {
   type CircuitPanelState,
   circuitPanelReducer,
   type CircuitScreen,
+  type CircuitViewId,
   type CircuitViewAction,
   countErrors,
   fixErrorPrompt,
@@ -65,6 +66,7 @@ import {
   viewerTabProps,
 } from "./runframeMessages";
 import { viewerFrame } from "./viewerFrame";
+import { secondCircuitView } from "./circuitSplit";
 
 /**
  * The app's own copy of RunFrame, a bare viewer that takes files over
@@ -240,20 +242,15 @@ export default function CircuitPanel(props: {
   readonly composerDraftTarget: ComposerThreadTarget;
   /** The thread whose panel this tab is in, where its Order button opens the Order tab. */
   readonly threadRef: ScopedThreadRef;
+  readonly split?: boolean;
 }) {
   const { environmentId, cwd, relativePath, visible, workspaceMutationId } = props;
-  const [viewerAttempt, setViewerAttempt] = useState(0);
   const [panelState, dispatch] = useReducer(
     circuitPanelReducer,
     preferredViewFrom(getLocalStorageItem(PREFERRED_VIEW_STORAGE_KEY, Schema.String)),
     initialCircuitPanelState,
   );
-  const [helpFor, setHelpFor] = useState<StandingViewId | null>(null);
   const [projectState, setProjectState] = useState<ProjectState>({ status: "loading" });
-  const [filePhases, setFilePhases] = useState<FilePhases | null>(null);
-  const [rebuilds, setRebuilds] = useState(0);
-  const [viewerFailed, setViewerFailed] = useState(false);
-  const frameRef = useRef<HTMLIFrameElement>(null);
   const reporting = useAutorouterReportRequest((request) => request.requested) && visible;
 
   const project = projectState.status === "ready" ? projectState.project : null;
@@ -318,18 +315,102 @@ export default function CircuitPanel(props: {
         : expectedBuild(entryFile, project.hashedFiles),
   });
   // Nothing new goes to the viewer until it is known whether there is a build to show instead.
-  // A report needs the routing problems, which only a run of the sources has.
   const viewerFiles =
     project === null || entryFile === null || built.status === "checking"
       ? null
-      : built.status === "current" && !reporting
+      : built.status === "current"
         ? built.files
         : { fsMap: project.fsMap, mainComponentPath: entryFile };
 
+  return (
+    <div
+      className="flex min-h-0 min-w-0 flex-1 flex-col divide-y divide-border/60 bg-background"
+      data-circuit-panel
+    >
+      <CircuitPane
+        project={project}
+        entryFile={entryFile}
+        // Only the primary frame runs sources for a report; the comparison stays on its build.
+        viewerFiles={
+          reporting && viewerFiles !== null && project !== null && entryFile !== null
+            ? { fsMap: project.fsMap, mainComponentPath: entryFile }
+            : viewerFiles
+        }
+        reportOwner
+        showOrder
+        reporting={reporting}
+        cwd={cwd}
+        failed={projectState.status === "failed"}
+        composerDraftTarget={props.composerDraftTarget}
+        threadRef={props.threadRef}
+        panelState={panelState}
+        dispatch={dispatch}
+        persistPreference
+        label="Primary circuit view"
+      />
+      {!props.split ? null : (
+        <SecondaryCircuitPane
+          project={project}
+          entryFile={entryFile}
+          viewerFiles={viewerFiles}
+          reportOwner={false}
+          showOrder={false}
+          reporting={false}
+          cwd={cwd}
+          failed={projectState.status === "failed"}
+          composerDraftTarget={props.composerDraftTarget}
+          threadRef={props.threadRef}
+          initialView={secondCircuitView(viewStateForFile(panelState, entryFile))}
+          persistPreference={false}
+          label="Secondary circuit view"
+        />
+      )}
+    </div>
+  );
+}
+
+interface CircuitPaneProps {
+  readonly threadRef: ScopedThreadRef;
+  readonly project: LoadedProject | null;
+  readonly entryFile: string | null;
+  readonly viewerFiles: ViewerFiles | null;
+  readonly cwd: string | undefined;
+  readonly failed: boolean;
+  readonly composerDraftTarget: ComposerThreadTarget;
+  readonly panelState: CircuitPanelState;
+  readonly dispatch: Dispatch<CircuitViewAction & { readonly file: string }>;
+  readonly persistPreference: boolean;
+  readonly label: string;
+  readonly reportOwner: boolean;
+  readonly showOrder: boolean;
+  readonly reporting: boolean;
+}
+
+function SecondaryCircuitPane(
+  props: Omit<CircuitPaneProps, "panelState" | "dispatch"> & {
+    readonly initialView: CircuitViewId;
+  },
+) {
+  const [panelState, dispatch] = useReducer(
+    circuitPanelReducer,
+    props.initialView,
+    initialCircuitPanelState,
+  );
+  return <CircuitPane {...props} panelState={panelState} dispatch={dispatch} />;
+}
+
+function CircuitPane(props: CircuitPaneProps) {
+  const { project, entryFile, viewerFiles, cwd, panelState, dispatch } = props;
+  const [filePhases, setFilePhases] = useState<FilePhases | null>(null);
+  const [rebuilds, setRebuilds] = useState(0);
+  const [viewerFailed, setViewerFailed] = useState(false);
+  const frameRef = useRef<HTMLIFrameElement>(null);
+  const [viewerAttempt, setViewerAttempt] = useState(0);
+  const [helpFor, setHelpFor] = useState<StandingViewId | null>(null);
   const view = viewStateForFile(panelState, entryFile);
   const notice = !cwd ? (
     <Notice title="No project folder" description="Open a project to see its circuit here." />
-  ) : projectState.status === "failed" ? (
+  ) : props.failed ? (
     <Notice
       title="Couldn't read the project"
       description="The project's files could not be read from this environment."
@@ -359,7 +440,7 @@ export default function CircuitPanel(props: {
       if (hasStandingTab(screen)) setHelpFor(screen);
       return;
     }
-    if (canBePreferred(screen)) {
+    if (props.persistPreference && canBePreferred(screen)) {
       setLocalStorageItem(PREFERRED_VIEW_STORAGE_KEY, screen, Schema.String);
     }
     dispatch({ type: "user_picked", file: entryFile, screen });
@@ -373,18 +454,19 @@ export default function CircuitPanel(props: {
   };
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col bg-background" data-circuit-panel>
-      {entryFile === null ? null : (
-        <CircuitViewTabs
-          tabs={viewTabs(view)}
-          screen={view.screen}
-          unmuted={unmuted}
-          errorCount={countErrors(view.counts) + (view.executionError === null ? 0 : 1)}
-          running={view.running}
-          onPick={pickScreen}
-          onOrder={() => openOrderPane(props.threadRef)}
-        />
-      )}
+    <section
+      className="flex min-h-0 min-w-0 flex-1 flex-col bg-background"
+      aria-label={props.label}
+    >
+      <CircuitViewTabs
+        tabs={entryFile === null ? [] : viewTabs(view)}
+        screen={view.screen}
+        unmuted={unmuted}
+        errorCount={countErrors(view.counts) + (view.executionError === null ? 0 : 1)}
+        running={view.running}
+        onPick={pickScreen}
+        onOrder={props.showOrder ? () => openOrderPane(props.threadRef) : undefined}
+      />
       <div className="relative flex min-h-0 flex-1 flex-col">
         <CircuitViewer
           key={viewerAttempt}
@@ -394,7 +476,7 @@ export default function CircuitPanel(props: {
           covered={notice !== null || view.screen === "source"}
           rebuilds={rebuilds}
           dispatch={dispatch}
-          onPhases={setFilePhases}
+          onPhases={props.reportOwner ? setFilePhases : undefined}
           onStartFailed={setViewerFailed}
           onRetry={() => {
             setViewerFailed(false);
@@ -420,39 +502,41 @@ export default function CircuitPanel(props: {
         onClose={() => setHelpFor(null)}
         onAddToPrompt={addToPrompt}
       />
-      <AutorouterReportDialog
-        open={reporting}
-        cwd={cwd}
-        file={entryFile}
-        build={
-          !cwd
-            ? { state: "unavailable", reason: "Open a project to report its circuit's routing." }
-            : projectState.status === "failed"
-              ? {
-                  state: "unavailable",
-                  reason: "The project's files could not be read, so its circuit was not built.",
-                }
-              : project !== null && entryFile === null
-                ? { state: "unavailable", reason: "This project has no circuit to build yet." }
-                : viewerFailed
-                  ? {
-                      state: "unavailable",
-                      reason:
-                        "The circuit viewer didn't start, so the circuit was not built. Close this and choose Try again.",
-                    }
-                  : {
-                      state:
-                        view.running || (phases === null && view.executionError === null)
-                          ? "building"
-                          : "built",
-                    }
-        }
-        phases={phases ?? []}
-        onRebuild={() => setRebuilds((count) => count + 1)}
-        loadPhaseInput={(phaseId) => loadPhaseInput(frameRef.current, phaseId)}
-        onClose={() => useAutorouterReportRequest.setState({ requested: false })}
-      />
-    </div>
+      {props.reportOwner ? (
+        <AutorouterReportDialog
+          open={props.reporting}
+          cwd={cwd}
+          file={entryFile}
+          build={
+            !cwd
+              ? { state: "unavailable", reason: "Open a project to report its circuit's routing." }
+              : props.failed
+                ? {
+                    state: "unavailable",
+                    reason: "The project's files could not be read, so its circuit was not built.",
+                  }
+                : project !== null && entryFile === null
+                  ? { state: "unavailable", reason: "This project has no circuit to build yet." }
+                  : viewerFailed
+                    ? {
+                        state: "unavailable",
+                        reason:
+                          "The circuit viewer didn't start, so the circuit was not built. Close this and choose Try again.",
+                      }
+                    : {
+                        state:
+                          view.running || (phases === null && view.executionError === null)
+                            ? "building"
+                            : "built",
+                      }
+          }
+          phases={phases ?? []}
+          onRebuild={() => setRebuilds((count) => count + 1)}
+          loadPhaseInput={(phaseId) => loadPhaseInput(frameRef.current, phaseId)}
+          onClose={() => useAutorouterReportRequest.setState({ requested: false })}
+        />
+      ) : null}
+    </section>
   );
 }
 
@@ -482,7 +566,7 @@ function CircuitViewTabs(props: {
   readonly errorCount: number;
   readonly running: boolean;
   readonly onPick: (screen: CircuitScreen) => void;
-  readonly onOrder: () => void;
+  readonly onOrder: (() => void) | undefined;
 }) {
   const availableRow = useRef<HTMLDivElement>(null);
   const measuringRow = useRef<HTMLDivElement>(null);
@@ -551,7 +635,12 @@ function CircuitViewTabs(props: {
     id !== "source" && id !== "errors" && !props.unmuted.has(id);
 
   return (
-    <div className={cn(FILE_SURFACE_SUBHEADER_CLASS, "justify-between")}>
+    <div
+      className={cn(
+        FILE_SURFACE_SUBHEADER_CLASS,
+        "justify-between gap-1 in-data-[preview-panel-mode=inline]:mb-0 in-data-[preview-panel-mode=inline]:h-10 in-data-[preview-panel-mode=inline]:min-h-10 in-data-[preview-panel-mode=inline]:border-border/60",
+      )}
+    >
       <div ref={availableRow} className="relative flex min-w-0 flex-1 items-center gap-1">
         {visible.length > 0 ? (
           <ToggleGroup
@@ -624,16 +713,20 @@ function CircuitViewTabs(props: {
       </div>
       <div className="flex shrink-0 items-center gap-2">
         {props.running ? <Spinner className="size-3.5" /> : null}
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <Button size="icon-xs" variant="outline" aria-label="Order" onClick={props.onOrder}>
-                <ShoppingCart />
-              </Button>
-            }
-          />
-          <TooltipPopup side="bottom">Order this board</TooltipPopup>
-        </Tooltip>
+        {props.onOrder ? (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button size="icon-xs" variant="outline" aria-label="Order" onClick={props.onOrder}>
+                  <ShoppingCart />
+                </Button>
+              }
+            />
+            <TooltipPopup side="bottom">Order this board</TooltipPopup>
+          </Tooltip>
+        ) : (
+          <span aria-hidden className="size-7 shrink-0 sm:size-6" />
+        )}
       </div>
     </div>
   );
@@ -655,7 +748,7 @@ function CircuitViewer(props: {
   readonly rebuilds: number;
   readonly dispatch: Dispatch<PanelAction>;
   /** The phases of the run in the viewer. Null once it is sent files it has not run yet. */
-  readonly onPhases: (phases: FilePhases | null) => void;
+  readonly onPhases: ((phases: FilePhases | null) => void) | undefined;
   readonly onStartFailed: (failed: boolean) => void;
   readonly onRetry: () => void;
   readonly frameRef: RefObject<HTMLIFrameElement | null>;
@@ -688,7 +781,7 @@ function CircuitViewer(props: {
       const sentFile = sentRef.current?.file;
       if (sentFile === undefined) return;
       if (message.kind === "autorouter_phases") {
-        onPhases({ file: sentFile, phases: message.phases });
+        onPhases?.({ file: sentFile, phases: message.phases });
         return;
       }
       const { kind, ...detail } = message;
@@ -728,7 +821,7 @@ function CircuitViewer(props: {
     if (!filesChanged) return;
     sentRef.current = { file, fsMap, mainComponentPath, rebuilds };
     // The phases the viewer reported were of what it had before.
-    onPhases(null);
+    onPhases?.(null);
     dispatch({ type: "files_sent", file });
   }, [state, file, fsMap, mainComponentPath, screen, rebuilds, dispatch, onPhases, frameRef]);
 
