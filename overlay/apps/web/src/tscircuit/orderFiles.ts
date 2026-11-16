@@ -19,6 +19,8 @@ interface OrderFile {
   readonly suffix: string;
   /** A zip holds every file the viewer made; anything else is the one file it made. */
   readonly zipped: boolean;
+  /** The type of a file saved as itself. */
+  readonly mimeType: string;
 }
 
 export const ORDER_FILES: ReadonlyArray<OrderFile> = [
@@ -29,6 +31,7 @@ export const ORDER_FILES: ReadonlyArray<OrderFile> = [
     needs: "board",
     suffix: "-gerbers.zip",
     zipped: true,
+    mimeType: "application/zip",
   },
   {
     kind: "bom",
@@ -37,6 +40,7 @@ export const ORDER_FILES: ReadonlyArray<OrderFile> = [
     needs: "parts",
     suffix: "-bom.csv",
     zipped: false,
+    mimeType: "text/csv;charset=utf-8",
   },
   {
     kind: "pick_and_place",
@@ -45,6 +49,7 @@ export const ORDER_FILES: ReadonlyArray<OrderFile> = [
     needs: "parts",
     suffix: "-pick-and-place.csv",
     zipped: false,
+    mimeType: "text/csv;charset=utf-8",
   },
   {
     kind: "kicad_project",
@@ -53,6 +58,26 @@ export const ORDER_FILES: ReadonlyArray<OrderFile> = [
     needs: "board",
     suffix: "-kicad.zip",
     zipped: true,
+    mimeType: "application/zip",
+  },
+  {
+    kind: "step",
+    label: "STEP model",
+    description: "The board and its parts as a 3D solid, for mechanical CAD such as an enclosure.",
+    needs: "board",
+    suffix: ".step",
+    zipped: false,
+    mimeType: "application/step",
+  },
+  {
+    kind: "glb",
+    label: "3D model (GLB)",
+    description:
+      "The board and its parts as a textured 3D model, for viewers, renders and the web.",
+    needs: "board",
+    suffix: ".glb",
+    zipped: false,
+    mimeType: "model/gltf-binary",
   },
 ];
 
@@ -111,8 +136,8 @@ export function orderProjectName(entryFile: string, cwd: string): string {
 export const orderFileName = (file: OrderFile, projectName: string): string =>
   `${projectName}${file.suffix}`;
 
-/** File contents by path, as the viewer frame made them. */
-export type OrderFileContents = Readonly<Record<string, string>>;
+/** File contents by path, as the viewer frame made them: text, or bytes for a binary file. */
+export type OrderFileContents = Readonly<Record<string, string | Uint8Array>>;
 
 /** The frame runs project code, so a path it names is not trusted to stay inside a zip. */
 const isSafeRelativePath = (path: string): boolean =>
@@ -122,25 +147,38 @@ const isSafeRelativePath = (path: string): boolean =>
   !path.includes("\0") &&
   path.split("/").every((segment) => segment !== "" && segment !== "." && segment !== "..");
 
-/** The files in the viewer's answer. Null when it holds none that can be saved safely. */
+/** The frame's answer is a structured clone, but a frame runs project code: check, do not assume. */
+const isArrayBuffer = (value: unknown): value is ArrayBuffer =>
+  Object.prototype.toString.call(value) === "[object ArrayBuffer]";
+
+/**
+ * The files in the viewer's answer: text in `files`, bytes in `binary_files`. Null when it
+ * holds none, or one that cannot be saved safely.
+ */
 export function readOrderFiles(payload: OrderResponsePayload): OrderFileContents | null {
-  const files = isRecord(payload.files) ? Object.entries(payload.files) : [];
-  const valid = files.every(
-    (entry): entry is [string, string] =>
-      isSafeRelativePath(entry[0]) && typeof entry[1] === "string",
-  );
-  return files.length > 0 && valid ? Object.fromEntries(files) : null;
+  const text = isRecord(payload.files) ? Object.entries(payload.files) : [];
+  const binary = isRecord(payload.binary_files) ? Object.entries(payload.binary_files) : [];
+  const contents: Record<string, string | Uint8Array> = {};
+  for (const [path, value] of text) {
+    if (!isSafeRelativePath(path) || typeof value !== "string") return null;
+    contents[path] = value;
+  }
+  for (const [path, value] of binary) {
+    if (!isSafeRelativePath(path) || !isArrayBuffer(value) || path in contents) return null;
+    contents[path] = new Uint8Array(value);
+  }
+  return Object.keys(contents).length > 0 ? contents : null;
 }
 
 /** The one file to save: a zip of everything the viewer made, or the single file it made. */
 export async function packOrderFiles(file: OrderFile, contents: OrderFileContents): Promise<Blob> {
   if (!file.zipped) {
-    const [text = ""] = Object.values(contents);
-    return new Blob([text], { type: "text/csv;charset=utf-8" });
+    const [data = ""] = Object.values(contents);
+    return new Blob([data as BlobPart], { type: file.mimeType });
   }
   const { default: JSZip } = await import("jszip");
   const zip = new JSZip();
-  for (const [path, text] of Object.entries(contents)) zip.file(path, text);
+  for (const [path, data] of Object.entries(contents)) zip.file(path, data);
   return zip.generateAsync({ type: "blob", compression: "DEFLATE" });
 }
 

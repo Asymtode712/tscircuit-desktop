@@ -358,6 +358,37 @@
             };
             return { files };
           },
+          // The board and its parts as one solid, as RunFrame's own "STEP" export makes it.
+          step: async (circuitJson, projectName) => {
+            const { circuitJsonToStep } = await loadConverter("circuit-json-to-step");
+            const board = circuitJson.find((element) => element.type === "pcb_board");
+            const { width, height, thickness } = board ?? {};
+            const dimensions = [width, height, thickness].every((value) => typeof value === "number")
+              ? { boardWidth: width, boardHeight: height, boardThickness: thickness }
+              : {};
+            const made = await circuitJsonToStep(circuitJson, {
+              ...dimensions,
+              productName: projectName,
+              includeComponents: true,
+              includeExternalMeshes: true,
+            });
+            // One STEP text, or a map of file names to texts from a converter that splits them.
+            if (typeof made === "string") return { files: { [`${projectName}.step`]: made } };
+            if (made !== null && typeof made === "object") return { files: made };
+            throw new Error("The STEP converter did not return a file.");
+          },
+          // As RunFrame's "GLB (Binary GLTF)" export makes it. Bytes, not text: sent as binary_files.
+          glb: async (circuitJson, projectName) => {
+            const { convertCircuitJsonToGltf } = await loadConverter("circuit-json-to-gltf");
+            const glb = await convertCircuitJsonToGltf(circuitJson, {
+              format: "glb",
+              boardTextureResolution: 1024,
+            });
+            if (!(glb instanceof ArrayBuffer)) {
+              throw new Error("The GLB converter did not return a binary file.");
+            }
+            return { binary_files: { [`${projectName}.glb`]: glb } };
+          },
           // JLCPCB's smallest order, which is the package's default: 5 boards, 2 of them assembled.
           jlcpcb_quote: async (circuitJson) => {
             const { convertCircuitJsonToJlcpcbQuote } = await loadConverter(JLCPCB_QUOTE);
@@ -412,6 +443,8 @@
               { tscircuit_desktop_type: RESPONSE_TYPE, request_id: request.request_id, ...result },
               // A page without an origin cannot be addressed by one.
               event.origin === "null" ? "*" : event.origin,
+              // A model is megabytes of bytes: hand them over instead of copying them.
+              Object.values(result.binary_files ?? {}).filter((bytes) => bytes instanceof ArrayBuffer),
             );
           };
           const make = Object.hasOwn(makers, request.kind) ? makers[request.kind] : null;

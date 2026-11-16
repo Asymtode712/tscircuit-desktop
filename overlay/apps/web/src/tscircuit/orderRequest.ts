@@ -12,6 +12,8 @@ export type OrderRequestKind =
   | "bom"
   | "pick_and_place"
   | "kicad_project"
+  | "step"
+  | "glb"
   | "jlcpcb_quote";
 
 export interface OrderRequest {
