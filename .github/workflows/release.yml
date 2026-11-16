@@ -2,9 +2,11 @@ name: Release
 
 # Builds tscircuit desktop for Apple Silicon Macs, Windows x64 and Linux x64.
 #
-#   - On every push to main it publishes a GitHub release, v<major>.<minor>.<run>.
-#     Major and minor come from "version" in package.json; the last number is
-#     this workflow's run number, so no commit is needed to bump it.
+#   - On every push to main it publishes a GitHub release, one patch number
+#     above the release before it: v0.1.61, then v0.1.62. No commit is needed
+#     to bump it, and the minor number never moves by itself.
+#   - Run by hand on main with "bump" set to "minor", it publishes the first
+#     release of the next minor version instead: v0.2.0 after v0.1.x.
 #   - On a pull request that changes the app or this file it only builds, and
 #     keeps the packages as workflow artifacts, so the build can be tried before
 #     merging.
@@ -42,6 +44,12 @@ on:
       - "branding/**"
       - "scripts/**"
   workflow_dispatch:
+    inputs:
+      bump:
+        description: "patch: the next release as usual. minor: start the next minor version, such as 0.2.0 after 0.1.x."
+        type: choice
+        options: [patch, minor]
+        default: patch
 
 permissions:
   contents: read
@@ -55,28 +63,41 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
+      tscircuit: ${{ steps.version.outputs.tscircuit }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 24
 
+      # Runs on main wait for each other (see "concurrency"), so the release
+      # this counts from is the one before it.
       - name: Choose the version
         id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUMP: ${{ inputs.bump || 'patch' }}
         run: |
-          base="$(node -p "require('./package.json').version.split('.').slice(0, 2).join('.')")"
-          version="${base}.${GITHUB_RUN_NUMBER}"
+          tags="$(gh api "repos/$GITHUB_REPOSITORY/releases" --paginate --jq '.[] | select(.draft | not) | .tag_name')"
+          version="$(node scripts/release-version.ts "$BUMP" <<< "$tags")"
           if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
             version="${version}-pr.${{ github.event.pull_request.number }}.${GITHUB_RUN_NUMBER}"
           fi
+          # The newest tscircuit, which viewer.json asks for. Every build job
+          # below is held to it, so all three bundle the version the release's
+          # title names.
+          tscircuit="$(node scripts/tscircuit-version.ts)"
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "Version $version"
+          echo "tscircuit=$tscircuit" >> "$GITHUB_OUTPUT"
+          echo "Version $version, with tscircuit $tscircuit"
 
   mac:
     name: Apple Silicon
     runs-on: macos-15
     needs: version
     timeout-minutes: 90
+    env:
+      VIEWER_TSCIRCUIT_VERSION: ${{ needs.version.outputs.tscircuit }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -181,6 +202,8 @@ jobs:
     runs-on: ubuntu-24.04
     needs: version
     timeout-minutes: 60
+    env:
+      VIEWER_TSCIRCUIT_VERSION: ${{ needs.version.outputs.tscircuit }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -286,6 +309,7 @@ jobs:
     uses: ./.github/workflows/build-windows.yml
     with:
       version: ${{ needs.version.outputs.version }}
+      tscircuit: ${{ needs.version.outputs.tscircuit }}
       sign: false
 
   windows:
@@ -297,6 +321,7 @@ jobs:
     uses: ./.github/workflows/build-windows.yml
     with:
       version: ${{ needs.version.outputs.version }}
+      tscircuit: ${{ needs.version.outputs.tscircuit }}
       sign: true
 
   publish:
@@ -333,6 +358,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.version.outputs.version }}
+          TSCIRCUIT: ${{ needs.version.outputs.tscircuit }}
         run: |
           cat > "$RUNNER_TEMP/notes.md" <<'NOTES'
           **Install on an Apple Silicon Mac:** download the `.dmg`, open it, and drag tscircuit desktop to Applications.
@@ -350,6 +376,6 @@ jobs:
           gh release create "v$VERSION" "${files[@]}" \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
-            --title "tscircuit desktop $VERSION" \
+            --title "tscircuit desktop $VERSION (tscircuit $TSCIRCUIT)" \
             --notes-file "$RUNNER_TEMP/notes.md" \
             --generate-notes
